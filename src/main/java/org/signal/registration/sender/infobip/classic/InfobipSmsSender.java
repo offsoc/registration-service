@@ -10,12 +10,11 @@ import com.google.i18n.phonenumbers.Phonenumber;
 import com.google.protobuf.InvalidProtocolBufferException;
 import com.infobip.ApiException;
 import com.infobip.api.SmsApi;
+import com.infobip.model.SmsAdvancedTextualRequest;
 import com.infobip.model.SmsDestination;
-import com.infobip.model.SmsMessage;
-import com.infobip.model.SmsRequest;
 import com.infobip.model.SmsResponse;
 import com.infobip.model.SmsResponseDetails;
-import com.infobip.model.SmsTextContent;
+import com.infobip.model.SmsTextualMessage;
 import io.micrometer.core.instrument.Timer;
 import io.micronaut.scheduling.TaskExecutors;
 import jakarta.inject.Named;
@@ -113,21 +112,21 @@ public class InfobipSmsSender implements VerificationCodeSender {
     final String e164 = PhoneNumberUtil.getInstance().format(phoneNumber, PhoneNumberUtil.PhoneNumberFormat.E164);
 
     final String verificationCode = verificationCodeGenerator.generateVerificationCode();
-    final SmsTextContent content = new SmsTextContent().text(verificationSmsBodyProvider.getVerificationBody(phoneNumber, clientType, verificationCode, languageRanges));
+    final String body = verificationSmsBodyProvider.getVerificationBody(phoneNumber, clientType, verificationCode, languageRanges);
 
-    final SmsMessage smsMessage = new SmsMessage()
-        .sender(senderIdSelector.getSenderId(phoneNumber))
+    final SmsTextualMessage smsMessage = new SmsTextualMessage()
+        .from(senderIdSelector.getSenderId(phoneNumber))
         .addDestinationsItem(new SmsDestination().to(e164))
-        .content(content);
+        .text(body);
 
-    final SmsRequest smsMessageRequest = new SmsRequest()
+    final SmsAdvancedTextualRequest smsMessageRequest = new SmsAdvancedTextualRequest()
         .messages(List.of(smsMessage));
 
     final Timer.Sample sample = Timer.start();
 
     return CompletableFuture.supplyAsync(() -> {
       try {
-        final SmsResponse smsResponse = smsApiClient.sendSmsMessages(smsMessageRequest).execute();
+        final SmsResponse smsResponse = smsApiClient.sendSmsMessage(smsMessageRequest).execute();
         final String messageId = checkSenderRejectedAndExtractMessageId(smsResponse.getMessages());
 
         return new AttemptData(Optional.of(messageId),

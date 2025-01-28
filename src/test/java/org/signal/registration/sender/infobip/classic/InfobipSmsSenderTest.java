@@ -10,9 +10,9 @@ import static org.mockito.Mockito.when;
 import com.google.i18n.phonenumbers.PhoneNumberUtil;
 import com.infobip.ApiException;
 import com.infobip.api.SmsApi;
-import com.infobip.model.SmsMessageStatus;
 import com.infobip.model.SmsResponse;
 import com.infobip.model.SmsResponseDetails;
+import com.infobip.model.MessageStatus;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
@@ -49,10 +49,10 @@ public class InfobipSmsSenderTest {
 
   @Test
   void sendException() throws ApiException {
-    final SmsApi.SendSmsMessagesRequest messageRequest = mock(SmsApi.SendSmsMessagesRequest.class);
+    final SmsApi.SendSmsMessageRequest messageRequest = mock(SmsApi.SendSmsMessageRequest.class);
 
     when(codeGenerator.generateVerificationCode()).thenReturn("123456");
-    when(client.sendSmsMessages(any())).thenReturn(messageRequest);
+    when(client.sendSmsMessage(any())).thenReturn(messageRequest);
     when(messageRequest.execute()).thenThrow(ApiException.builder().build());
 
     assertThrows(CompletionException.class, () -> sender.sendVerificationCode(MessageTransport.SMS,
@@ -63,13 +63,13 @@ public class InfobipSmsSenderTest {
 
   @Test
   void sendAndVerify() throws ApiException {
-    final SmsApi.SendSmsMessagesRequest messageRequest = mock(SmsApi.SendSmsMessagesRequest.class);
+    final SmsApi.SendSmsMessageRequest messageRequest = mock(SmsApi.SendSmsMessageRequest.class);
     final SmsResponse response = mock(SmsResponse.class);
     final SmsResponseDetails details = mock(SmsResponseDetails.class);
-    final SmsMessageStatus status = mock(SmsMessageStatus.class);
+    final MessageStatus status = mock(MessageStatus.class);
 
     when(codeGenerator.generateVerificationCode()).thenReturn("123456");
-    when(client.sendSmsMessages(any())).thenReturn(messageRequest);
+    when(client.sendSmsMessage(any())).thenReturn(messageRequest);
     when(messageRequest.execute()).thenReturn(response);
     when(response.getMessages()).thenReturn(List.of(details));
     when(details.getStatus()).thenReturn(status);
@@ -87,13 +87,13 @@ public class InfobipSmsSenderTest {
 
   @Test
   void sendRejectedSignalsBlocked() throws ApiException {
-    final SmsApi.SendSmsMessagesRequest messageRequest = mock(SmsApi.SendSmsMessagesRequest.class);
+    final SmsApi.SendSmsMessageRequest messageRequest = mock(SmsApi.SendSmsMessageRequest.class);
     final SmsResponse response = mock(SmsResponse.class);
     final SmsResponseDetails details = mock(SmsResponseDetails.class);
-    final SmsMessageStatus status = mock(SmsMessageStatus.class);
+    final MessageStatus status = mock(MessageStatus.class);
 
     when(codeGenerator.generateVerificationCode()).thenReturn("123456");
-    when(client.sendSmsMessages(any())).thenReturn(messageRequest);
+    when(client.sendSmsMessage(any())).thenReturn(messageRequest);
     when(messageRequest.execute()).thenReturn(response);
     when(response.getMessages()).thenReturn(List.of(details));
     when(details.getStatus()).thenReturn(status);

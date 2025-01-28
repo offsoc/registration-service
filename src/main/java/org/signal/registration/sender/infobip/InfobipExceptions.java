@@ -7,7 +7,6 @@ package org.signal.registration.sender.infobip;
 
 import com.infobip.ApiException;
 import com.infobip.model.MessageStatus;
-import com.infobip.model.SmsMessageStatus;
 import io.micronaut.http.HttpStatus;
 import jakarta.validation.constraints.NotNull;
 import java.util.Optional;
@@ -70,14 +69,14 @@ public class InfobipExceptions {
     return null;
   }
 
-  public static void maybeThrowSenderFraudBlockException(final SmsMessageStatus status) throws SenderFraudBlockException {
+  public static void maybeThrowSenderFraudBlockException(final MessageStatus status) throws SenderFraudBlockException {
     // ID 87 is "SIGNALS_BLOCKED", which is defined as "Message has been rejected due to an anti-fraud mechanism"
     if (status.getId() == 87) {
       throw new SenderFraudBlockException("Message has been rejected due to an anti-fraud mechanism");
     }
   }
 
-  public static void maybeThrowInfobipRejectedRequestException(final SmsMessageStatus status) throws InfobipRejectedRequestException {
+  public static void maybeThrowInfobipRejectedRequestException(final MessageStatus status) throws InfobipRejectedRequestException {
     if (REJECTED_GROUP_IDS.contains(status.getGroupId())) {
       throw new InfobipRejectedRequestException(status);
     }
