@@ -6,11 +6,12 @@
 package org.signal.registration.sender.infobip;
 
 import com.infobip.model.MessageStatus;
+import com.infobip.model.SmsMessageStatus;
 import org.signal.registration.sender.SenderRejectedRequestException;
 
 public class InfobipRejectedRequestException extends SenderRejectedRequestException {
-  final MessageStatus status;
-  public InfobipRejectedRequestException(final MessageStatus status) {
+  final SmsMessageStatus status;
+  public InfobipRejectedRequestException(final SmsMessageStatus status) {
     super(String.format("Failed to deliver message. Status: %s", status));
     this.status = status;
   }
