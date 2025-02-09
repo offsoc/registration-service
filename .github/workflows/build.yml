@@ -22,14 +22,14 @@ jobs:
         distribution: 'adopt'
         java-version: '23'
 
-    - name: Clone reg repository
+    - name: Clone registration-service repository
       run: |
-        git clone https://github.com/offsoc/Signal-Server.git
-        cd Signal-Server
+        git clone https://github.com/offsoc/registration-service.git
+        cd registration-service
 
     - name: Go offline with Maven dependencies
       run: |
-        cd Signal-Server
+        cd registration-service
         ./mvnw dependency:go-offline
 
     - name: Clean and install without tests
@@ -40,25 +40,6 @@ jobs:
     - name: Upload compiled artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: signal-server-artifacts
-        path: Signal-Server/service/target/*.jar 
-    - name: Upload compiled artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: websocket-resources-artifacts
-        path: Signal-Server/websocket-resources/target/*.jar 
-
-    - name: Upload compiled artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name:  api-doc-artifacts
-        path: Signal-Server/api-doc/target/*.jar 
-
-    - name: Upload compiled artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name:  integration-tests-artifacts
-        path: Signal-Server/integration-tests/target/*.jar 
-
-
-  
+        name: registration-service
+        path: registration-service/target/*.jar 
+    
