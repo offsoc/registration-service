@@ -34,7 +34,7 @@ jobs:
 
     - name: Clean and install without tests
       run: |
-        cd Signal-Server
+        cd registration-service
         ./mvnw clean install -DskipTests -Pexclude-spam-filter
         
     - name: Upload compiled artifacts
