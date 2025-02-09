@@ -1,4 +1,4 @@
-name: CI Build and Run Signal-Server
+name: CI Build and Run registration-service
 
 on:
   push:
