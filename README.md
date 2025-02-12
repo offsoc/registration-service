@@ -175,5 +175,12 @@ Help
 
 We cannot provide direct technical support. Get help running this software in your own environment in our [unofficial community forum][community forum].
 
+License
+-------
+
+Copyright 2022 Signal Messenger, LLC
+
+Licensed under the AGPLv3: https://www.gnu.org/licenses/agpl-3.0.html
+
 [github issues]: https://github.com/signalapp/registration-service/issues
 [community forum]: https://community.signalusers.org
