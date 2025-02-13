@@ -113,6 +113,8 @@
     <dependency>
       <groupId>com.infobip</groupId>
       <artifactId>infobip-api-java-client</artifactId>
+      <!-- Do not upgrade. 5.x and above uses a "send SMS" API that does not return synchronous error responses,
+      and our current registration flow depends on synchronous error reporting by message providers. -->
       <version>4.3.1</version>
     </dependency>
 
