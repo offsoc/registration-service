@@ -11,7 +11,6 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import java.time.Duration;
 import java.util.List;
-import javax.annotation.Nullable;
 
 /**
  * @param messageRepeatCount The number of times the TTS call should repeat the verification message
@@ -23,10 +22,10 @@ import javax.annotation.Nullable;
 public record MessageBirdVoiceConfiguration(
     @Bindable(defaultValue = "3") @NotNull int messageRepeatCount,
     @Bindable(defaultValue = "PT10M") @NotNull Duration sessionTtl,
-    @Nullable List<@NotBlank String> supportedLanguages) {
+    @NotNull List<@NotBlank String> supportedLanguages) {
 
   // See https://developers.messagebird.com/api/voice-messaging/#the-voice-message-object
-  private static List<String> DEFAULT_SUPPORTED_LANGUAGES = List.of(
+  private static final List<String> DEFAULT_SUPPORTED_LANGUAGES = List.of(
       "cy-gb",
       "da-dk",
       "de-de",

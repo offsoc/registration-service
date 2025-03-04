@@ -5,13 +5,12 @@
 package org.signal.registration.sender.messagebird.classic;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.google.i18n.phonenumbers.PhoneNumberUtil;
@@ -26,6 +25,7 @@ import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.concurrent.CompletionException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -34,7 +34,6 @@ import org.signal.registration.sender.AttemptData;
 import org.signal.registration.sender.ClientType;
 import org.signal.registration.sender.MessageTransport;
 import org.signal.registration.sender.VerificationCodeGenerator;
-import org.signal.registration.sender.VerificationTTSBodyProvider;
 import org.signal.registration.sender.messagebird.MessageBirdSenderConfiguration;
 import org.signal.registration.util.CompletionExceptions;
 
@@ -45,20 +44,21 @@ public class MessageBirdVoiceSenderTest {
       .format(NUMBER, PhoneNumberUtil.PhoneNumberFormat.E164);
   private static final List<Locale.LanguageRange> EN = Locale.LanguageRange.parse("en");
   private VerificationCodeGenerator codeGenerator;
-  private VerificationTTSBodyProvider bodyProvider;
+  private MessageBirdVoiceTTSBodyProvider bodyProvider;
   private MessageBirdClient client;
   private MessageBirdVoiceSender sender;
+  private MessageBirdVoiceConfiguration config;
 
 
   @BeforeEach
   public void setup() {
-    final MessageBirdVoiceConfiguration config = new MessageBirdVoiceConfiguration(
+    config = new MessageBirdVoiceConfiguration(
         3,
         Duration.ofSeconds(1),
         List.of("en-gb"));
     codeGenerator = mock(VerificationCodeGenerator.class);
     client = mock(MessageBirdClient.class);
-    bodyProvider = mock(VerificationTTSBodyProvider.class);
+    bodyProvider = mock(MessageBirdVoiceTTSBodyProvider.class);
 
     sender = new MessageBirdVoiceSender(Runnable::run, config, codeGenerator, bodyProvider, client,
         mock(ApiClientInstrumenter.class),
@@ -86,7 +86,7 @@ public class MessageBirdVoiceSenderTest {
     final Throwable error = CompletionExceptions.unwrap(assertThrows(CompletionException.class, () -> sender
         .sendVerificationCode(MessageTransport.VOICE, NUMBER, EN, ClientType.IOS)
         .join()));
-    assertTrue(error instanceof GeneralException);
+    assertInstanceOf(GeneralException.class, error);
   }
 
   @Test
@@ -94,6 +94,8 @@ public class MessageBirdVoiceSenderTest {
     when(codeGenerator.generateVerificationCode()).thenReturn("123456");
     when(bodyProvider.getVerificationBody(NUMBER, ClientType.IOS, "123456", EN))
         .thenReturn("body");
+    when(bodyProvider.lookupMessageBirdLanguage(any()))
+        .thenReturn(Optional.of(MessageBirdVoiceTTSBodyProvider.supportedLanguages(config.supportedLanguages()).get("en")));
 
     final VoiceMessageResponse response = response(0);
     when(client.sendVoiceMessage(argThat((VoiceMessage message) ->

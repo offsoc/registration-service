@@ -17,10 +17,8 @@ import jakarta.inject.Named;
 import jakarta.inject.Singleton;
 import java.io.IOException;
 import java.time.Duration;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -34,7 +32,6 @@ import org.signal.registration.sender.SenderIdSelector;
 import org.signal.registration.sender.UnsupportedMessageTransportException;
 import org.signal.registration.sender.VerificationCodeGenerator;
 import org.signal.registration.sender.VerificationCodeSender;
-import org.signal.registration.sender.VerificationTTSBodyProvider;
 import org.signal.registration.sender.messagebird.MessageBirdClassicSessionData;
 import org.signal.registration.sender.messagebird.MessageBirdExceptions;
 import org.signal.registration.sender.messagebird.MessageBirdSenderConfiguration;
@@ -56,10 +53,9 @@ public class MessageBirdVoiceSender implements VerificationCodeSender {
   public static final String SENDER_NAME = "messagebird-voice";
 
   private final MessageBirdVoiceConfiguration configuration;
-  private final Map<String, String> supportedLanguages;
   private final Executor executor;
   private final VerificationCodeGenerator verificationCodeGenerator;
-  private final VerificationTTSBodyProvider verificationTTSBodyProvider;
+  private final MessageBirdVoiceTTSBodyProvider verificationTTSBodyProvider;
   private final MessageBirdClient client;
   private final ApiClientInstrumenter apiClientInstrumenter;
   private final SenderIdSelector senderIdSelector;
@@ -68,12 +64,11 @@ public class MessageBirdVoiceSender implements VerificationCodeSender {
       final @Named(TaskExecutors.IO) Executor executor,
       final MessageBirdVoiceConfiguration configuration,
       final VerificationCodeGenerator verificationCodeGenerator,
-      final VerificationTTSBodyProvider verificationTTSBodyProvider,
+      final MessageBirdVoiceTTSBodyProvider verificationTTSBodyProvider,
       final MessageBirdClient messageBirdClient,
       final ApiClientInstrumenter apiClientInstrumenter,
       final MessageBirdSenderConfiguration senderConfiguration) {
     this.configuration = configuration;
-    this.supportedLanguages = supportedLanguages(configuration.supportedLanguages());
     this.executor = executor;
     this.verificationCodeGenerator = verificationCodeGenerator;
     this.verificationTTSBodyProvider = verificationTTSBodyProvider;
@@ -103,14 +98,7 @@ public class MessageBirdVoiceSender implements VerificationCodeSender {
       final List<Locale.LanguageRange> languageRanges) {
     // the language is supported only if the upstream TTS API supports
     // it AND there's a translation for it
-    return lookupMessageBirdLanguage(languageRanges).isPresent()
-        && verificationTTSBodyProvider.supportsLanguage(languageRanges);
-  }
-
-  private Optional<String> lookupMessageBirdLanguage(final List<Locale.LanguageRange> languageRanges) {
-    return Optional
-        .ofNullable(Locale.lookupTag(languageRanges, supportedLanguages.keySet()))
-        .map(supportedLanguages::get);
+    return verificationTTSBodyProvider.supportsLanguage(languageRanges);
   }
 
   @Override
@@ -125,7 +113,7 @@ public class MessageBirdVoiceSender implements VerificationCodeSender {
     final VoiceMessage request = new VoiceMessage(body, e164);
     request.setOriginator(senderIdSelector.getSenderId(phoneNumber));
     request.setRepeat(configuration.messageRepeatCount());
-    lookupMessageBirdLanguage(languageRanges).ifPresent(request::setLanguage);
+    verificationTTSBodyProvider.lookupMessageBirdLanguage(languageRanges).ifPresent(request::setLanguage);
 
     final Timer.Sample sample = Timer.start();
 
@@ -162,16 +150,5 @@ public class MessageBirdVoiceSender implements VerificationCodeSender {
       return CompletableFuture.failedFuture(e);
     }
 
-  }
-
-  private static Map<String, String> supportedLanguages(final List<String> original) {
-    // messagebird only supports language tags that include an extension. If there's
-    // a tag without an extension, we'd like it to map to one of the tags messagebird supports
-    Map<String, String> ret = new HashMap<>();
-    for (String lang : original) {
-      ret.put(lang, lang);
-      ret.putIfAbsent(lang.split("-")[0], lang);
-    }
-    return ret;
   }
 }
