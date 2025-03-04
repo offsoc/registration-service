@@ -68,7 +68,6 @@ import org.signal.registration.sender.twilio.verify.TwilioVerifySender;
 @Property(name = "verification.sms.supported-languages", value = "en")
 @Property(name = "messagebird.access-key", value = "access-key")
 @Property(name = "messagebird.default-sender-id", value = "test")
-@Property(name = "messagebird.voice.supported-languages", value="fr,pt")
 @Property(name = "infobip.default-sender-id", value="default")
 @Property(name = "infobip.api-key", value="api-key")
 @Property(name = "infobip.base-url", value="https://mmmex9.us.api.com")
