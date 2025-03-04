@@ -18,7 +18,7 @@ import com.messagebird.exceptions.UnauthorizedException;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.signal.registration.sender.messagebird.verify.MessageBirdVerifySender;
+import org.signal.registration.sender.twilio.verify.TwilioVerifySender;
 import org.signal.registration.session.RegistrationAttempt;
 import org.signal.registration.session.RegistrationSession;
 import org.signal.registration.session.SessionCompletedEvent;
@@ -57,10 +57,10 @@ class MessageBirdClassicConversionReporterTest {
             .setRemoteId("a")
             .setSenderName(MessageBirdSmsSender.SENDER_NAME)
             .build())
-        // attempt with non-classic sender
+        // attempt with different sender
         .addRegistrationAttempts(RegistrationAttempt.newBuilder()
             .setRemoteId("b")
-            .setSenderName(MessageBirdVerifySender.SENDER_NAME)
+            .setSenderName(TwilioVerifySender.SENDER_NAME)
             .build())
         // success with voice sender
         .addRegistrationAttempts(RegistrationAttempt.newBuilder()
