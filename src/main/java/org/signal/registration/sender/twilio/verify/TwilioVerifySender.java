@@ -94,7 +94,11 @@ public class TwilioVerifySender implements VerificationCodeSender {
       final MessageTransport messageTransport,
       final Phonenumber.PhoneNumber phoneNumber,
       final List<Locale.LanguageRange> languageRanges) {
-    return Locale.lookupTag(languageRanges, configuration.supportedLanguages()) != null;
+    return
+        (messageTransport == MessageTransport.SMS
+            && StringUtils.isNotBlank(configuration.customTemplateSid())
+            && Locale.lookupTag(languageRanges, configuration.customTemplateSupportedLanguages()) != null)
+        || Locale.lookupTag(languageRanges, configuration.supportedLanguages()) != null;
   }
 
   @Override
@@ -127,12 +131,18 @@ public class TwilioVerifySender implements VerificationCodeSender {
                 channel.toString())
             .setCustomFriendlyName(configuration.serviceFriendlyName());
 
-    List<String> supportedLangauges = configuration.supportedLanguages();
+    final String locale;
     if (messageTransport == MessageTransport.SMS && StringUtils.isNotBlank(configuration.customTemplateSid())) {
-      supportedLangauges = configuration.customTemplateSupportedLanguages();
-      verificationCreator.setTemplateSid(configuration.customTemplateSid());
+      final String customTemplateLocale = Locale.lookupTag(languageRanges, configuration.customTemplateSupportedLanguages());
+      if (customTemplateLocale != null) {
+        locale = customTemplateLocale;
+        verificationCreator.setTemplateSid(configuration.customTemplateSid());
+      } else {
+        locale = Locale.lookupTag(languageRanges, configuration.supportedLanguages());
+      }
+    } else {
+      locale = Locale.lookupTag(languageRanges, configuration.supportedLanguages());
     }
-    final String locale = Locale.lookupTag(languageRanges, supportedLangauges);
     verificationCreator.setLocale(locale);
 
     if (clientType == ClientType.ANDROID_WITH_FCM) {
