@@ -8,6 +8,7 @@ package org.signal.registration.sender.twilio.verify;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.fail;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -17,6 +18,7 @@ import com.google.i18n.phonenumbers.PhoneNumberUtil;
 import com.google.i18n.phonenumbers.Phonenumber;
 import com.twilio.exception.ApiException;
 import com.twilio.http.TwilioRestClient;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
@@ -25,8 +27,6 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
-import org.junit.Assert;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -68,7 +68,7 @@ class TwilioVerifySenderTest {
       }
       throw new ApiException("test", 20429, "", 200, null);
     }, "test").toCompletableFuture().join();
-    assertEquals(callCounter.get(), successTries);
+    assertEquals(successTries, callCounter.get());
   }
 
   @Test
@@ -95,7 +95,7 @@ class TwilioVerifySenderTest {
     final CompletionException exception = assertThrows(CompletionException.class,
         () -> twilioVerifySender.withRetries(() -> {
           if (called.getAndSet(true)) {
-            Assert.fail("method should not be retired");
+            fail("method should not be retired");
           }
           throw new ApiException("test", 20404, "", 200, null);
         }, "test").toCompletableFuture().join());
