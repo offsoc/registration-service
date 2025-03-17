@@ -15,7 +15,7 @@
   <parent>
     <groupId>io.micronaut.platform</groupId>
     <artifactId>micronaut-parent</artifactId>
-    <version>4.6.3</version>
+    <version>4.7.6</version>
   </parent>
 
   <properties>
@@ -26,12 +26,12 @@
     <exec.mainClass>org.signal.registration.Application</exec.mainClass>
 
     <!-- See https://console.cloud.google.com/artifacts/docker/google.com:cloudsdktool/us/gcr.io/google-cloud-cli -->
-    <firestore.emulator.version>505.0.0-emulators</firestore.emulator.version>
+    <firestore.emulator.version>514.0.0-emulators</firestore.emulator.version>
     <reactive.grpc.version>1.2.4</reactive.grpc.version>
-    <testcontainers.version>1.20.4</testcontainers.version>
+    <testcontainers.version>1.20.6</testcontainers.version>
 
     <!-- eclipse-temurin:21-jre-jammy (note: always use the multi-arch manifest *LIST* here); see https://hub.docker.com/_/eclipse-temurin -->
-    <docker.image.sha256>ebeb51a2a147be42b7d42342fecbeb2d9cb764f7742054024ac9a17bc1c8a21b</docker.image.sha256>
+    <docker.image.sha256>02fc89fa8766a9ba221e69225f8d1c10bb91885ddbd3c112448e23488ba40ab6</docker.image.sha256>
   </properties>
 
   <repositories>
@@ -46,7 +46,7 @@
       <dependency>
         <groupId>com.google.cloud</groupId>
         <artifactId>libraries-bom</artifactId>
-        <version>26.52.0</version>
+        <version>26.56.0</version>
         <type>pom</type>
         <scope>import</scope>
       </dependency>
@@ -101,7 +101,7 @@
     <dependency>
       <groupId>com.googlecode.libphonenumber</groupId>
       <artifactId>libphonenumber</artifactId>
-      <version>8.13.50</version>
+      <version>9.0.1</version>
     </dependency>
 
     <dependency>
@@ -118,6 +118,14 @@
       <version>4.3.1</version>
     </dependency>
 
+    <!-- Explicitly specifying this dependency because upgrading micronaut to 4.7.6 excludes it; it's required by
+    the infobip java client -->
+    <dependency>
+      <groupId>org.jetbrains.kotlin</groupId>
+      <artifactId>kotlin-stdlib-jdk8</artifactId>
+      <version>1.9.25</version>
+    </dependency>
+
     <dependency>
       <groupId>com.salesforce.servicelibs</groupId>
       <artifactId>reactor-grpc-stub</artifactId>
@@ -127,7 +135,7 @@
     <dependency>
       <groupId>com.twilio.sdk</groupId>
       <artifactId>twilio</artifactId>
-      <version>10.6.1</version>
+      <version>10.7.0</version>
 
       <exclusions>
         <!-- Conflicts with pretty much everything in com.google.cloud:*, which has a newer version -->
@@ -150,6 +158,12 @@
         <exclusion>
           <groupId>commons-io</groupId>
           <artifactId>commons-io</artifactId>
+        </exclusion>
+
+        <!-- conflicts with google-cloud-bigquery, which has a newer version -->
+        <exclusion>
+          <groupId>org.json</groupId>
+          <artifactId>json</artifactId>
         </exclusion>
       </exclusions>
     </dependency>
@@ -192,6 +206,12 @@
         <exclusion>
           <groupId>org.threeten</groupId>
           <artifactId>threetenbp</artifactId>
+        </exclusion>
+
+        <!-- conflicts with com.google.cloud:* which has a newer version -->
+        <exclusion>
+          <groupId>commons-codec</groupId>
+          <artifactId>commons-codec</artifactId>
         </exclusion>
       </exclusions>
     </dependency>
@@ -271,11 +291,26 @@
       <groupId>org.apache.commons</groupId>
       <artifactId>commons-csv</artifactId>
       <version>1.12.0</version>
+      <exclusions>
+        <!-- conflicts with com.google.cloud:* which has a newer version -->
+        <exclusion>
+          <groupId>commons-codec</groupId>
+          <artifactId>commons-codec</artifactId>
+        </exclusion>
+      </exclusions>
     </dependency>
 
     <dependency>
       <groupId>com.google.cloud</groupId>
       <artifactId>google-cloud-bigquery</artifactId>
+    </dependency>
+
+    <!-- Explicitly add a dependency on this version so we can re-examine a bunch of exclusions when it is transitively
+    updated -->
+    <dependency>
+      <groupId>commons-codec</groupId>
+      <artifactId>commons-codec</artifactId>
+      <version>1.18.0</version>
     </dependency>
 
     <!-- required for YAML configuration files in Micronaut 4 -->
