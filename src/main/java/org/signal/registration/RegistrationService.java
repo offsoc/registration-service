@@ -360,7 +360,7 @@ public class RegistrationService {
               // The sender may view the submitted code as an illegal argument or may reject the attempt to check a
               // code altogether. We can treat any case of "the sender got it, but said 'no'" the same way we would
               // treat an accepted-but-incorrect code.
-              if (throwable instanceof SenderRejectedRequestException) {
+              if (CompletionExceptions.unwrap(throwable) instanceof SenderRejectedRequestException) {
                 return false;
               }
 

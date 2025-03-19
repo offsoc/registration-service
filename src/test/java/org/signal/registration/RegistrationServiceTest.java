@@ -611,6 +611,31 @@ class RegistrationServiceTest {
     verify(sessionRepository, never()).updateSession(any(), any());
   }
 
+  @Test
+  void checkVerificationCodeSenderRejected() {
+    final AttemptData attemptData = new AttemptData(Optional.of("test"), VERIFICATION_CODE_BYTES);
+
+    when(sender.sendVerificationCode(MessageTransport.SMS, PHONE_NUMBER, LANGUAGE_RANGES, CLIENT_TYPE))
+        .thenReturn(CompletableFuture.completedFuture(attemptData));
+
+    final UUID sessionId;
+    {
+      final RegistrationSession session = registrationService.createRegistrationSession(PHONE_NUMBER, "", SESSION_METADATA).join();
+      sessionId = UUIDUtil.uuidFromByteString(session.getId());
+
+      registrationService.sendVerificationCode(MessageTransport.SMS, sessionId, SENDER_NAME, LANGUAGE_RANGES, CLIENT_TYPE).join();
+    }
+
+    when(sender.checkVerificationCode(VERIFICATION_CODE, VERIFICATION_CODE_BYTES))
+        .thenReturn(CompletableFuture.failedFuture(new CompletionException(new SenderRejectedRequestException("sender rejected"))));
+
+    final RegistrationSession session = registrationService.checkVerificationCode(sessionId, VERIFICATION_CODE).join();
+
+    assertTrue(session.getVerifiedCode().isEmpty());
+    assertEquals(1, session.getCheckCodeAttempts());
+    assertEquals(CURRENT_TIME.toEpochMilli(), session.getLastCheckCodeAttemptEpochMillis());
+  }
+
   @ParameterizedTest
   @MethodSource
   void getNextActionTimes(final RegistrationSession session,
