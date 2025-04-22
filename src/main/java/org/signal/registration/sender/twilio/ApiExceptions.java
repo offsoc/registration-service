@@ -16,6 +16,8 @@ import org.signal.registration.sender.SenderInvalidParametersException;
 import org.signal.registration.sender.SenderRejectedRequestException;
 import org.signal.registration.sender.SenderRejectedTransportException;
 import org.signal.registration.util.CompletionExceptions;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class ApiExceptions {
 
@@ -52,6 +54,7 @@ public class ApiExceptions {
   );
 
   private static final Duration EXTERNAL_RETRY_INTERVAL = Duration.ofMinutes(1);
+  private static final Logger log = LoggerFactory.getLogger(ApiExceptions.class);
 
   private ApiExceptions() {}
 
@@ -67,6 +70,8 @@ public class ApiExceptions {
         return String.valueOf(apiException.getCode());
       } else if (apiException.getStatusCode() != null) {
         return "http_" + apiException.getStatusCode();
+      } else {
+        log.warn("Received twilio exception with no error code or HTTP status", apiException);
       }
     }
 
