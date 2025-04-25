@@ -37,6 +37,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
 import java.util.function.Function;
 import javax.annotation.Nullable;
@@ -235,7 +236,7 @@ class BigtableSessionRepository implements SessionRepository {
 
   @Override
   public CompletableFuture<RegistrationSession> updateSession(final UUID sessionId,
-      final Function<RegistrationSession, RegistrationSession> sessionUpdater) {
+      final Function<RegistrationSession, CompletionStage<RegistrationSession>> sessionUpdater) {
 
     final Timer.Sample sample = Timer.start();
 
@@ -245,12 +246,11 @@ class BigtableSessionRepository implements SessionRepository {
 
   @VisibleForTesting
   CompletableFuture<RegistrationSession> updateSession(final UUID sessionId,
-      final Function<RegistrationSession, RegistrationSession> sessionUpdater,
+      final Function<RegistrationSession, CompletionStage<RegistrationSession>> sessionUpdater,
       final int remainingRetries) {
 
     return getSession(sessionId)
-        .thenCompose(session -> {
-          final RegistrationSession updatedSession = sessionUpdater.apply(session);
+        .thenCompose(session -> sessionUpdater.apply(session).thenCompose(updatedSession -> {
           final Instant expiration = Instant.ofEpochMilli(updatedSession.getExpirationEpochMillis());
 
           return GoogleApiUtil.toCompletableFuture(bigtableDataClient.checkAndMutateRowAsync(
@@ -274,7 +274,7 @@ class BigtableSessionRepository implements SessionRepository {
                   }
                 }
               });
-        });
+        }));
   }
 
   private RegistrationSession extractSession(@Nullable final Row row) throws SessionNotFoundException {

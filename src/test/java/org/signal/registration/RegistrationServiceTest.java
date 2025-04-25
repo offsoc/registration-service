@@ -666,7 +666,7 @@ class RegistrationServiceTest {
             : Optional.empty()));
 
     final RegistrationService.NextActionTimes nextActionTimes =
-        registrationService.getNextActionTimes(session);
+        registrationService.getNextActionTimes(session).toCompletableFuture().join();
 
     assertEquals(expectNextSms ? Optional.of(CURRENT_TIME.plusSeconds(nextSmsSeconds)) : Optional.empty(),
         nextActionTimes.nextSms());
@@ -708,7 +708,7 @@ class RegistrationServiceTest {
             : Optional.empty()));
 
     final RegistrationSessionMetadata sessionMetadata =
-        registrationService.buildSessionMetadata(session);
+        registrationService.buildSessionMetadata(session).toCompletableFuture().join();
 
     assertEquals(session.getId(), sessionMetadata.getSessionId());
     assertEquals(
@@ -846,7 +846,7 @@ class RegistrationServiceTest {
             .build())
         .build();
 
-    final RegistrationSessionMetadata metadata = registrationService.buildSessionMetadata(session);
+    final RegistrationSessionMetadata metadata = registrationService.buildSessionMetadata(session).toCompletableFuture().join();
 
     assertTrue(metadata.getMayRequestSms());
     assertEquals(0, metadata.getNextSmsSeconds());
@@ -911,7 +911,8 @@ class RegistrationServiceTest {
             .build())
         .forEach(sessionBuilder::addRegistrationAttempts);
 
-    assertEquals(expectedExpiration, registrationService.getSessionExpiration(sessionBuilder.build()));
+    assertEquals(expectedExpiration,
+        registrationService.getSessionExpiration(sessionBuilder.build()).toCompletableFuture().join());
   }
 
   private static Stream<Arguments> getSessionExpiration() {

@@ -22,6 +22,7 @@ import java.time.Duration;
 import java.util.Locale;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.stream.Stream;
 import org.apache.commons.lang3.StringUtils;
 import org.junit.jupiter.api.Test;
@@ -50,13 +51,13 @@ class RegistrationServiceGrpcEndpointTest {
     final RegistrationService registrationService = mock(RegistrationService.class);
 
     when(registrationService.buildSessionMetadata(any()))
-        .thenAnswer((Answer<RegistrationSessionMetadata>) invocation -> {
+        .thenAnswer((Answer<CompletionStage<RegistrationSessionMetadata>>) invocation -> {
           final RegistrationSession session = invocation.getArgument(0, RegistrationSession.class);
 
-          return RegistrationSessionMetadata.newBuilder()
+          return CompletableFuture.completedFuture(RegistrationSessionMetadata.newBuilder()
               .setSessionId(session.getId())
               .setVerified(StringUtils.isNotBlank(session.getVerifiedCode()))
-              .build();
+              .build());
         });
 
     return registrationService;

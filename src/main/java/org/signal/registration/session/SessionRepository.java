@@ -9,6 +9,7 @@ import com.google.i18n.phonenumbers.Phonenumber;
 import java.time.Instant;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
 
 /**
@@ -57,5 +58,5 @@ public interface SessionRepository {
    * {@link SessionNotFoundException} if no session is found for the given identifier
    */
   CompletableFuture<RegistrationSession> updateSession(UUID sessionId,
-      Function<RegistrationSession, RegistrationSession> sessionUpdater);
+      Function<RegistrationSession, CompletionStage<RegistrationSession>> sessionUpdater);
 }
