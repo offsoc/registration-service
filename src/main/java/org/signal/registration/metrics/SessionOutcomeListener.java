@@ -81,7 +81,8 @@ public class SessionOutcomeListener implements ApplicationEventListener<SessionC
                 MetricsUtil.VERIFIED_TAG_NAME, String.valueOf(attemptVerified),
                 MetricsUtil.COUNTRY_CODE_TAG_NAME, String.valueOf(phoneNumber.getCountryCode()),
                 MetricsUtil.REGION_CODE_TAG_NAME, Optional.ofNullable(PhoneNumberUtil.getInstance().getRegionCodeForNumber(phoneNumber))
-                    .orElse("XX"))
+                    .orElse("XX"),
+                MetricsUtil.FIRST_ATTEMPT_TAG_NAME, String.valueOf(i == 0))
             .increment();
       }
 
