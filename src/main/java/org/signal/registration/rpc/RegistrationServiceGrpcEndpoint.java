@@ -54,9 +54,10 @@ public class RegistrationServiceGrpcEndpoint extends ReactorRegistrationServiceG
             registrationService.createRegistrationSession(phoneNumber, request.getRateLimitCollationKey(), SessionMetadata.newBuilder()
                 .setAccountExistsWithE164(request.getAccountExistsWithE164())
                 .build())))
-        .map(session -> CreateRegistrationSessionResponse.newBuilder()
-            .setSessionMetadata(registrationService.buildSessionMetadata(session))
-            .build())
+        .flatMap(session -> Mono.fromCompletionStage(registrationService.buildSessionMetadata(session))
+            .map(sessionMetadata -> CreateRegistrationSessionResponse.newBuilder()
+                .setSessionMetadata(sessionMetadata)
+            .build()))
         .onErrorResume(RateLimitExceededException.class, rateLimitExceededException -> {
           final CreateRegistrationSessionError.Builder errorBuilder = CreateRegistrationSessionError.newBuilder()
               .setErrorType(CreateRegistrationSessionErrorType.CREATE_REGISTRATION_SESSION_ERROR_TYPE_RATE_LIMITED)
@@ -82,9 +83,10 @@ public class RegistrationServiceGrpcEndpoint extends ReactorRegistrationServiceG
   public Mono<GetRegistrationSessionMetadataResponse> getSessionMetadata(final GetRegistrationSessionMetadataRequest request) {
     return Mono.fromSupplier(() -> UUIDUtil.uuidFromByteString(request.getSessionId()))
         .flatMap(sessionId -> Mono.fromFuture(registrationService.getRegistrationSession(sessionId)))
-        .map(session -> GetRegistrationSessionMetadataResponse.newBuilder()
-            .setSessionMetadata(registrationService.buildSessionMetadata(session))
-            .build())
+        .flatMap(session ->  Mono.fromCompletionStage(registrationService.buildSessionMetadata(session))
+            .map(sessionMetadata -> GetRegistrationSessionMetadataResponse.newBuilder()
+                .setSessionMetadata(sessionMetadata)
+                .build()))
         .onErrorReturn(SessionNotFoundException.class, GetRegistrationSessionMetadataResponse.newBuilder()
             .setError(GetRegistrationSessionMetadataError.newBuilder()
                 .setErrorType(GetRegistrationSessionMetadataErrorType.GET_REGISTRATION_SESSION_METADATA_ERROR_TYPE_NOT_FOUND)
@@ -99,7 +101,7 @@ public class RegistrationServiceGrpcEndpoint extends ReactorRegistrationServiceG
   public Mono<SendVerificationCodeResponse> sendVerificationCode(final SendVerificationCodeRequest request) {
     return Mono.fromSupplier(() -> Tuples.of(
             MessageTransports.getSenderMessageTransportFromRpcTransport(request.getTransport()),
-        UUIDUtil.uuidFromByteString(request.getSessionId()),
+            UUIDUtil.uuidFromByteString(request.getSessionId()),
             getLanguageRanges(request.getAcceptLanguage()),
             getServiceClientType(request.getClientType())
         ))
@@ -113,38 +115,45 @@ public class RegistrationServiceGrpcEndpoint extends ReactorRegistrationServiceG
           return Mono.fromFuture(
               registrationService.sendVerificationCode(messageTransport, sessionId, senderName, languageRanges, clientType));
         })
-        .map(session -> SendVerificationCodeResponse.newBuilder()
-            .setSessionMetadata(registrationService.buildSessionMetadata(session))
-            .build())
-        .onErrorResume(SessionAlreadyVerifiedException.class, sessionAlreadyVerifiedException -> Mono.just(
-            SendVerificationCodeResponse.newBuilder()
-                .setSessionMetadata(registrationService.buildSessionMetadata(sessionAlreadyVerifiedException.getRegistrationSession()))
-                .setError(SendVerificationCodeError.newBuilder()
-                    .setErrorType(SendVerificationCodeErrorType.SEND_VERIFICATION_CODE_ERROR_TYPE_SESSION_ALREADY_VERIFIED)
-                    .setMayRetry(false)
-                    .build())
+        .flatMap(session -> Mono.fromCompletionStage(registrationService.buildSessionMetadata(session))
+            .map(sessionMetadata -> SendVerificationCodeResponse.newBuilder()
+                .setSessionMetadata(sessionMetadata)
                 .build()))
+        .onErrorResume(SessionAlreadyVerifiedException.class, sessionAlreadyVerifiedException ->
+            Mono.fromCompletionStage(registrationService.buildSessionMetadata(sessionAlreadyVerifiedException.getRegistrationSession()))
+                .map(sessionMetadata ->
+                    SendVerificationCodeResponse.newBuilder()
+                        .setSessionMetadata(sessionMetadata)
+                        .setError(SendVerificationCodeError.newBuilder()
+                            .setErrorType(
+                                SendVerificationCodeErrorType.SEND_VERIFICATION_CODE_ERROR_TYPE_SESSION_ALREADY_VERIFIED)
+                            .setMayRetry(false)
+                            .build())
+                        .build()))
         .onErrorReturn(SessionNotFoundException.class, SendVerificationCodeResponse.newBuilder()
-                .setError(SendVerificationCodeError.newBuilder()
-                    .setErrorType(SendVerificationCodeErrorType.SEND_VERIFICATION_CODE_ERROR_TYPE_SESSION_NOT_FOUND)
-                    .setMayRetry(false)
-                    .build())
+            .setError(SendVerificationCodeError.newBuilder()
+                .setErrorType(SendVerificationCodeErrorType.SEND_VERIFICATION_CODE_ERROR_TYPE_SESSION_NOT_FOUND)
+                .setMayRetry(false)
                 .build())
-        .onErrorResume(RateLimitExceededException.class, rateLimitExceededException -> Mono.fromSupplier(() -> {
-          final SendVerificationCodeError.Builder errorBuilder = SendVerificationCodeError.newBuilder()
-              .setErrorType(SendVerificationCodeErrorType.SEND_VERIFICATION_CODE_ERROR_TYPE_RATE_LIMITED)
-              .setMayRetry(rateLimitExceededException.getRetryAfterDuration().isPresent());
+            .build())
+        .onErrorResume(RateLimitExceededException.class, rateLimitExceededException -> Mono.fromCompletionStage(
+            registrationService.buildSessionMetadata(
+                rateLimitExceededException.getRegistrationSession().orElseThrow(() ->
+                        new IllegalStateException("Rate limit exception did not include a session reference"))))
+                .map(sessionMetadata -> {
+                  final SendVerificationCodeError.Builder errorBuilder = SendVerificationCodeError.newBuilder()
+                      .setErrorType(SendVerificationCodeErrorType.SEND_VERIFICATION_CODE_ERROR_TYPE_RATE_LIMITED)
+                      .setMayRetry(rateLimitExceededException.getRetryAfterDuration().isPresent());
 
-          rateLimitExceededException.getRetryAfterDuration()
-              .ifPresent(retryAfterDuration -> errorBuilder.setRetryAfterSeconds(retryAfterDuration.getSeconds()));
+                  rateLimitExceededException.getRetryAfterDuration()
+                      .ifPresent(
+                          retryAfterDuration -> errorBuilder.setRetryAfterSeconds(retryAfterDuration.getSeconds()));
 
-          return SendVerificationCodeResponse.newBuilder()
-              .setError(errorBuilder.build())
-              .setSessionMetadata(registrationService.buildSessionMetadata(
-                  rateLimitExceededException.getRegistrationSession().orElseThrow(() ->
-                      new IllegalStateException("Rate limit exception did not include a session reference"))))
-              .build();
-        }))
+                  return SendVerificationCodeResponse.newBuilder()
+                      .setError(errorBuilder.build())
+                      .setSessionMetadata(sessionMetadata)
+                      .build();
+                }))
         .onErrorReturn(SenderFraudBlockException.class, SendVerificationCodeResponse.newBuilder()
             .setError(SendVerificationCodeError.newBuilder()
                 .setErrorType(SendVerificationCodeErrorType.SEND_VERIFICATION_CODE_ERROR_TYPE_SUSPECTED_FRAUD)
@@ -152,19 +161,24 @@ public class RegistrationServiceGrpcEndpoint extends ReactorRegistrationServiceG
                 .build())
             .build())
         .onErrorReturn(SenderRejectedRequestException.class, SendVerificationCodeResponse.newBuilder()
-                .setError(SendVerificationCodeError.newBuilder()
-                    .setErrorType(SendVerificationCodeErrorType.SEND_VERIFICATION_CODE_ERROR_TYPE_SENDER_REJECTED)
-                    .setMayRetry(false)
-                    .build())
+            .setError(SendVerificationCodeError.newBuilder()
+                .setErrorType(SendVerificationCodeErrorType.SEND_VERIFICATION_CODE_ERROR_TYPE_SENDER_REJECTED)
+                .setMayRetry(false)
                 .build())
-        .onErrorResume(TransportNotAllowedException.class, transportNotAllowedException -> Mono.fromSupplier(() ->
-            SendVerificationCodeResponse.newBuilder()
-                .setSessionMetadata(registrationService.buildSessionMetadata(transportNotAllowedException.getRegistrationSession()))
-                .setError(SendVerificationCodeError.newBuilder()
-                    .setErrorType(SendVerificationCodeErrorType.SEND_VERIFICATION_CODE_ERROR_TYPE_TRANSPORT_NOT_ALLOWED)
-                    .setMayRetry(false)
-                    .build())
-                .build()))
+            .build())
+        .onErrorResume(TransportNotAllowedException.class, transportNotAllowedException ->
+            Mono.fromCompletionStage(
+                    registrationService.buildSessionMetadata(transportNotAllowedException.getRegistrationSession()))
+                .map(sessionMetadata ->
+                    SendVerificationCodeResponse.newBuilder()
+                        .setSessionMetadata(
+                            sessionMetadata)
+                        .setError(SendVerificationCodeError.newBuilder()
+                            .setErrorType(
+                                SendVerificationCodeErrorType.SEND_VERIFICATION_CODE_ERROR_TYPE_TRANSPORT_NOT_ALLOWED)
+                            .setMayRetry(false)
+                            .build())
+                        .build()))
         .doOnError(throwable -> !(throwable instanceof IllegalArgumentException),
             throwable -> logger.warn("Failed to send verification code", throwable))
         .onErrorMap(IllegalArgumentException.class, ignored -> new StatusException(Status.INVALID_ARGUMENT));
@@ -173,24 +187,29 @@ public class RegistrationServiceGrpcEndpoint extends ReactorRegistrationServiceG
   @Override
   public Mono<CheckVerificationCodeResponse> checkVerificationCode(final CheckVerificationCodeRequest request) {
     return Mono.fromSupplier(() -> UUIDUtil.uuidFromByteString(request.getSessionId()))
-        .flatMap(sessionId -> Mono.fromFuture(registrationService.checkVerificationCode(UUIDUtil.uuidFromByteString(request.getSessionId()), request.getVerificationCode())))
-        .map(session -> CheckVerificationCodeResponse.newBuilder()
-            .setSessionMetadata(registrationService.buildSessionMetadata(session))
-            .build())
-        .onErrorResume(NoVerificationCodeSentException.class, noVerificationCodeSentException -> Mono.just(CheckVerificationCodeResponse.newBuilder()
-            .setSessionMetadata(registrationService.buildSessionMetadata(noVerificationCodeSentException.getRegistrationSession()))
-            .setError(CheckVerificationCodeError.newBuilder()
-                .setErrorType(CheckVerificationCodeErrorType.CHECK_VERIFICATION_CODE_ERROR_TYPE_NO_CODE_SENT)
-                .setMayRetry(false)
-                .build())
-            .build()))
+        .flatMap(sessionId -> Mono.fromFuture(registrationService.checkVerificationCode(UUIDUtil.uuidFromByteString(request.getSessionId()), request.getVerificationCode()))
+        .flatMap(session ->  Mono.fromCompletionStage(registrationService.buildSessionMetadata(session))
+            .map(sessionMetadata -> CheckVerificationCodeResponse.newBuilder()
+                .setSessionMetadata(sessionMetadata)
+                .build()))
+        .onErrorResume(NoVerificationCodeSentException.class, noVerificationCodeSentException ->
+            Mono.fromCompletionStage(registrationService.buildSessionMetadata(noVerificationCodeSentException.getRegistrationSession()))
+                    .map(sessionMetadata -> CheckVerificationCodeResponse.newBuilder()
+                        .setSessionMetadata(sessionMetadata)
+                        .setError(CheckVerificationCodeError.newBuilder()
+                            .setErrorType(CheckVerificationCodeErrorType.CHECK_VERIFICATION_CODE_ERROR_TYPE_NO_CODE_SENT)
+                            .setMayRetry(false)
+                            .build())
+                        .build()))
         .onErrorReturn(SessionNotFoundException.class, CheckVerificationCodeResponse.newBuilder()
             .setError(CheckVerificationCodeError.newBuilder()
                 .setErrorType(CheckVerificationCodeErrorType.CHECK_VERIFICATION_CODE_ERROR_TYPE_SESSION_NOT_FOUND)
                 .setMayRetry(false)
                 .build())
             .build())
-        .onErrorResume(RateLimitExceededException.class, rateLimitExceededException -> Mono.fromSupplier(() -> {
+        .onErrorResume(RateLimitExceededException.class, rateLimitExceededException -> Mono.fromCompletionStage(registrationService.buildSessionMetadata(
+            rateLimitExceededException.getRegistrationSession().orElseThrow(() ->
+                new IllegalStateException("Rate limit exception did not include a session reference")))).map(sessionMetadata -> {
           final CheckVerificationCodeError.Builder errorBuilder = CheckVerificationCodeError.newBuilder()
               .setErrorType(CheckVerificationCodeErrorType.CHECK_VERIFICATION_CODE_ERROR_TYPE_RATE_LIMITED)
               .setMayRetry(rateLimitExceededException.getRetryAfterDuration().isPresent());
@@ -200,11 +219,9 @@ public class RegistrationServiceGrpcEndpoint extends ReactorRegistrationServiceG
 
           return CheckVerificationCodeResponse.newBuilder()
               .setError(errorBuilder.build())
-              .setSessionMetadata(registrationService.buildSessionMetadata(
-                  rateLimitExceededException.getRegistrationSession().orElseThrow(() ->
-                      new IllegalStateException("Rate limit exception did not include a session reference"))))
+              .setSessionMetadata(sessionMetadata)
               .build();
-        }))
+        })))
         .onErrorReturn(AttemptExpiredException.class, CheckVerificationCodeResponse.newBuilder()
             .setError(CheckVerificationCodeError.newBuilder()
                 .setErrorType(CheckVerificationCodeErrorType.CHECK_VERIFICATION_CODE_ERROR_TYPE_ATTEMPT_EXPIRED)

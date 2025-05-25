@@ -6,6 +6,7 @@
 package org.signal.registration.sender.twilio;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 import com.twilio.exception.ApiException;
 import java.util.concurrent.CompletionException;
@@ -24,5 +25,13 @@ class ApiExceptionsTest {
     assertEquals("1234", ApiExceptions.extractErrorCode(new CompletionException(
         new SenderRejectedRequestException(
             new ApiException("Test", 1234, null, 4321, null)))));
+  }
+
+  @Test
+  void handleNullErrorCodes() {
+    final ApiException nullErrorCode = new ApiException("Test", null, null, 4321, null);
+    assertEquals(nullErrorCode, ApiExceptions.toSenderException(nullErrorCode));
+    assertFalse(ApiExceptions.isRetriable(nullErrorCode));
+    assertEquals("http_4321", ApiExceptions.extractErrorCode(nullErrorCode));
   }
 }

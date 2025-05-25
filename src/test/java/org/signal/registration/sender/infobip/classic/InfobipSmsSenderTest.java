@@ -1,7 +1,7 @@
 package org.signal.registration.sender.infobip.classic;
 
-import static org.junit.Assert.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
@@ -10,9 +10,9 @@ import static org.mockito.Mockito.when;
 import com.google.i18n.phonenumbers.PhoneNumberUtil;
 import com.infobip.ApiException;
 import com.infobip.api.SmsApi;
+import com.infobip.model.MessageStatus;
 import com.infobip.model.SmsResponse;
 import com.infobip.model.SmsResponseDetails;
-import com.infobip.model.MessageStatus;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.List;

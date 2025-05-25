@@ -6,6 +6,7 @@
 package org.signal.registration.session;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
@@ -17,7 +18,9 @@ import io.micronaut.context.event.ApplicationEventPublisher;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -78,8 +81,8 @@ class MemorySessionRepositoryTest extends AbstractSessionRepositoryTest {
     final Instant now = Instant.now();
     when(getClock().instant()).thenReturn(now);
 
-    final Function<RegistrationSession, RegistrationSession> setVerifiedCodeFunction =
-        session -> session.toBuilder().setVerifiedCode(verificationCode).build();
+    final Function<RegistrationSession, CompletionStage<RegistrationSession>> setVerifiedCodeFunction =
+        session -> CompletableFuture.completedFuture(session.toBuilder().setVerifiedCode(verificationCode).build());
 
     final UUID sessionId = UUIDUtil.uuidFromByteString(repository.createSession(PHONE_NUMBER, SESSION_METADATA, getClock().instant().plus(TTL)).join().getId());
     repository.updateSession(sessionId, setVerifiedCodeFunction).join();
@@ -101,7 +104,7 @@ class MemorySessionRepositoryTest extends AbstractSessionRepositoryTest {
         assertThrows(CompletionException.class,
             () -> repository.updateSession(sessionId, setVerifiedCodeFunction).join());
 
-    assertTrue(completionException.getCause() instanceof SessionNotFoundException);
+    assertInstanceOf(SessionNotFoundException.class, completionException.getCause());
 
     verify(sessionCompletedEventPublisher).publishEventAsync(new SessionCompletedEvent(expectedSession));
   }

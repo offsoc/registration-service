@@ -30,7 +30,7 @@ import org.signal.registration.sender.fictitious.FictitiousNumberVerificationCod
 import org.signal.registration.sender.fictitious.FictitiousNumberVerificationCodeSender;
 import org.signal.registration.sender.infobip.classic.InfobipSmsSender;
 import org.signal.registration.sender.messagebird.classic.MessageBirdSmsSender;
-import org.signal.registration.sender.messagebird.verify.MessageBirdVerifySender;
+import org.signal.registration.sender.messagebird.classic.MessageBirdVoiceSender;
 import org.signal.registration.sender.prescribed.PrescribedVerificationCodeRepository;
 import org.signal.registration.sender.prescribed.PrescribedVerificationCodeSender;
 import org.signal.registration.sender.twilio.classic.TwilioMessagingServiceSmsSender;
@@ -40,19 +40,19 @@ import org.signal.registration.sender.twilio.verify.TwilioVerifySender;
 @MicronautTest
 @Property(name = "selection.sms.fallback-senders", value = "twilio-verify,twilio-programmable-messaging")
 @Property(name = "selection.sms.default-weights.twilio-verify", value = "1")
-@Property(name = "selection.sms.default-weights.messagebird-verify", value = "0")
-@Property(name = "selection.sms.region-weights.is.messagebird-verify", value = "1")
+@Property(name = "selection.sms.default-weights.infobip-sms", value = "0")
 @Property(name = "selection.sms.region-weights.gl.messagebird-sms", value = "1")
 @Property(name = "selection.sms.region-weights.gb.infobip-sms", value = "1")
 @Property(name = "selection.sms.region-overrides.cn", value = "twilio-verify")
 @Property(name = "selection.sms.region-overrides.mx", value = "twilio-programmable-messaging")
 @Property(name = "selection.voice.fallback-senders", value = "twilio-verify,twilio-programmable-voice")
 @Property(name = "selection.voice.default-weights.twilio-verify", value = "1")
-@Property(name = "selection.voice.default-weights.messagebird-verify", value = "0")
+@Property(name = "selection.voice.default-weights.messagebird-voice", value = "0")
+@Property(name = "selection.voice.region-overrides.is", value = "messagebird-voice")
 @Property(name = "selection.voice.region-overrides.cn", value = "twilio-verify")
 @Property(name = "selection.voice.region-overrides.mx", value = "twilio-programmable-voice")
-@Property(name = "adaptive.sms.default-choices", value = "twilio-verify,messagebird-verify")
-@Property(name = "adaptive.voice.default-choices", value = "twilio-verify,messagebird-verify")
+@Property(name = "adaptive.sms.default-choices", value = "twilio-verify,infobip-sms")
+@Property(name = "adaptive.voice.default-choices", value = "twilio-verify,messagebird-voice")
 @Property(name = "twilio.account-sid", value = "account-sid")
 @Property(name = "twilio.api-key-sid", value = "api-key-sid")
 @Property(name = "twilio.api-key-secret", value = "api-key-secret")
@@ -110,7 +110,7 @@ class WeightedSelectionStrategyIntegrationTest {
   private static final Phonenumber.PhoneNumber NEVER_USE_VERIFY_NUMBER =
       PhoneNumberUtil.getInstance().getExampleNumber("MX");
 
-  private static final Phonenumber.PhoneNumber USE_MB_VERIFY_NUMBER =
+  private static final Phonenumber.PhoneNumber USE_MB_VOICE_NUMBER =
       PhoneNumberUtil.getInstance().getExampleNumber("IS");
 
   private static final Phonenumber.PhoneNumber USE_MB_SMS_NUMBER =
@@ -170,7 +170,7 @@ class WeightedSelectionStrategyIntegrationTest {
         Arguments.of(MessageTransport.SMS,   NEVER_USE_VERIFY_NUMBER,     "fr", ClientType.IOS, TwilioMessagingServiceSmsSender.class),
         Arguments.of(MessageTransport.VOICE, NEVER_USE_VERIFY_NUMBER,     "de", ClientType.IOS, TwilioVoiceSender.class),
         Arguments.of(MessageTransport.VOICE, NEVER_USE_VERIFY_NUMBER,     "fr", ClientType.IOS, TwilioVoiceSender.class),
-        Arguments.of(MessageTransport.SMS,   USE_MB_VERIFY_NUMBER,        "en", ClientType.IOS, MessageBirdVerifySender.class),
+        Arguments.of(MessageTransport.VOICE, USE_MB_VOICE_NUMBER,         "en", ClientType.IOS, MessageBirdVoiceSender.class),
         Arguments.of(MessageTransport.SMS,   USE_MB_SMS_NUMBER,           "en", ClientType.IOS, MessageBirdSmsSender.class),
         Arguments.of(MessageTransport.SMS,   USE_INFOBIP_SMS_NUMBER,      "en", ClientType.IOS, InfobipSmsSender.class));
   }

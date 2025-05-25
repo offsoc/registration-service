@@ -8,6 +8,7 @@ package org.signal.registration.sender.twilio.verify;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.fail;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -17,6 +18,7 @@ import com.google.i18n.phonenumbers.PhoneNumberUtil;
 import com.google.i18n.phonenumbers.Phonenumber;
 import com.twilio.exception.ApiException;
 import com.twilio.http.TwilioRestClient;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
@@ -25,8 +27,6 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
-import org.junit.Assert;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -68,7 +68,7 @@ class TwilioVerifySenderTest {
       }
       throw new ApiException("test", 20429, "", 200, null);
     }, "test").toCompletableFuture().join();
-    assertEquals(callCounter.get(), successTries);
+    assertEquals(successTries, callCounter.get());
   }
 
   @Test
@@ -95,7 +95,7 @@ class TwilioVerifySenderTest {
     final CompletionException exception = assertThrows(CompletionException.class,
         () -> twilioVerifySender.withRetries(() -> {
           if (called.getAndSet(true)) {
-            Assert.fail("method should not be retired");
+            fail("method should not be retired");
           }
           throw new ApiException("test", 20404, "", 200, null);
         }, "test").toCompletableFuture().join());
@@ -131,5 +131,47 @@ class TwilioVerifySenderTest {
         Arguments.of(MessageTransport.VOICE, phoneNumber, Locale.LanguageRange.parse("ja"), ClientType.IOS, false),
         Arguments.of(MessageTransport.SMS, phoneNumber, Locale.LanguageRange.parse("ja,en;q=0.4"), ClientType.IOS, true),
         Arguments.of(MessageTransport.VOICE, phoneNumber, Locale.LanguageRange.parse("ja,en;q=0.4"), ClientType.IOS, true));
+  }
+
+  @ParameterizedTest
+  @MethodSource
+  void supportsDestinationWithCustomTemplate(final MessageTransport messageTransport,
+      final Phonenumber.PhoneNumber phoneNumber,
+      final List<Locale.LanguageRange> languageRanges,
+      final ClientType clientType,
+      final boolean expectSupportsDestination) {
+
+    final TwilioVerifyConfiguration configuration =
+        new TwilioVerifyConfiguration("service-sid", "friendly-name", "app-hash", "custom-template-sid", List.of("ja"), List.of("en"));
+
+    twilioVerifySender = new TwilioVerifySender(
+        new SimpleMeterRegistry(),
+        twilioRestClient,
+        configuration,
+        mock(ApiClientInstrumenter.class),
+        Duration.ofMillis(1),
+        MAX_RETRIES);
+
+    assertEquals(expectSupportsDestination,
+        twilioVerifySender.supportsLanguage(messageTransport, phoneNumber, languageRanges));
+  }
+
+  private static Stream<Arguments> supportsDestinationWithCustomTemplate() throws NumberParseException {
+    final Phonenumber.PhoneNumber phoneNumber =
+        PhoneNumberUtil.getInstance().parse("+12025550123", null);
+
+    return Stream.of(
+        Arguments.of(MessageTransport.SMS, phoneNumber, Locale.LanguageRange.parse("en"), ClientType.IOS, true),
+        Arguments.of(MessageTransport.VOICE, phoneNumber, Locale.LanguageRange.parse("en"), ClientType.IOS, true),
+        Arguments.of(MessageTransport.SMS, phoneNumber, Locale.LanguageRange.parse("en"),
+            ClientType.ANDROID_WITHOUT_FCM, true),
+        Arguments.of(MessageTransport.SMS, phoneNumber, Locale.LanguageRange.parse("en"), ClientType.ANDROID_WITH_FCM,
+            true),
+        Arguments.of(MessageTransport.SMS, phoneNumber, Locale.LanguageRange.parse("en"), ClientType.UNKNOWN, true),
+        Arguments.of(MessageTransport.SMS, phoneNumber, Locale.LanguageRange.parse("ja"), ClientType.IOS, true),
+        Arguments.of(MessageTransport.VOICE, phoneNumber, Locale.LanguageRange.parse("ja"), ClientType.IOS, false),
+        Arguments.of(MessageTransport.SMS, phoneNumber, Locale.LanguageRange.parse("ja,en;q=0.4"), ClientType.IOS, true),
+        Arguments.of(MessageTransport.VOICE, phoneNumber, Locale.LanguageRange.parse("ja,en;q=0.4"), ClientType.IOS, true),
+        Arguments.of(MessageTransport.SMS, phoneNumber, Locale.LanguageRange.parse("fr"), ClientType.IOS, false));
   }
 }

@@ -54,6 +54,7 @@ import org.signal.registration.util.ClientTypes;
 import org.signal.registration.util.CompletionExceptions;
 import org.signal.registration.util.MessageTransports;
 import org.signal.registration.util.UUIDUtil;
+import reactor.core.publisher.Mono;
 
 /**
  * The registration service is the core orchestrator of registration business logic and manages registration sessions
@@ -234,8 +235,8 @@ public class RegistrationService {
                         attemptData,
                         selection.sender().getAttemptTtl()));
 
-                builder.setExpirationEpochMillis(getSessionExpiration(builder.build()).toEpochMilli());
-                return builder.build();
+                return getSessionExpiration(builder.build())
+                    .thenApply(expiration -> builder.setExpirationEpochMillis(expiration.toEpochMilli()).build());
               }))
               .exceptionallyCompose(throwable -> {
                 final Throwable unwrapped = CompletionExceptions.unwrap(throwable);
@@ -247,8 +248,8 @@ public class RegistrationService {
                             .addRejectedTransports(
                                 MessageTransports.getRpcMessageTransportFromSenderTransport(messageTransport));
 
-                        builder.setExpirationEpochMillis(getSessionExpiration(builder.build()).toEpochMilli());
-                        return builder.build();
+                        return getSessionExpiration(builder.build())
+                            .thenApply(expiration -> builder.setExpirationEpochMillis(expiration.toEpochMilli()).build());
                       })
                       .thenApply(updatedSession -> {
                         throw CompletionExceptions.wrap(new TransportNotAllowedException(e, updatedSession));
@@ -264,20 +265,22 @@ public class RegistrationService {
                   failedSendReason = FailedSendReason.FAILED_SEND_REASON_UNAVAILABLE;
                 }
 
-                return sessionRepository.updateSession(sessionId, sessionToUpdate -> sessionToUpdate.toBuilder()
-                        .addFailedAttempts(FailedSendAttempt.newBuilder()
-                            .setTimestampEpochMillis(clock.instant().toEpochMilli())
-                            .setSenderName(selection.sender().getName())
-                            .setSelectionReason(selection.reason().toString())
-                            .setMessageTransport(
-                                MessageTransports.getRpcMessageTransportFromSenderTransport(messageTransport))
-                            .setClientType(ClientTypes.getRpcClientTypeFromSenderClientType(clientType))
-                            .setFailedSendReason(failedSendReason))
-                        .build())
+                return sessionRepository.updateSession(sessionId, sessionToUpdate ->
+                        CompletableFuture.completedFuture(sessionToUpdate.toBuilder()
+                            .addFailedAttempts(FailedSendAttempt.newBuilder()
+                                .setTimestampEpochMillis(clock.instant().toEpochMilli())
+                                .setSenderName(selection.sender().getName())
+                                .setSelectionReason(selection.reason().toString())
+                                .setMessageTransport(
+                                    MessageTransports.getRpcMessageTransportFromSenderTransport(messageTransport))
+                                .setClientType(ClientTypes.getRpcClientTypeFromSenderClientType(clientType))
+                                .setFailedSendReason(failedSendReason))
+                            .build()))
                     .thenApply(updatedSession -> {
                       if (unwrapped instanceof RateLimitExceededException e) {
                         throw CompletionExceptions.wrap(
-                            new RateLimitExceededException(e.getRetryAfterDuration().orElse(null), e.getRegistrationSession().orElse(updatedSession)));
+                            new RateLimitExceededException(e.getRetryAfterDuration().orElse(null),
+                                e.getRegistrationSession().orElse(updatedSession)));
                       }
                       throw CompletionExceptions.wrap(throwable);
                     });
@@ -360,7 +363,7 @@ public class RegistrationService {
               // The sender may view the submitted code as an illegal argument or may reject the attempt to check a
               // code altogether. We can treat any case of "the sender got it, but said 'no'" the same way we would
               // treat an accepted-but-incorrect code.
-              if (throwable instanceof SenderRejectedRequestException) {
+              if (CompletionExceptions.unwrap(throwable) instanceof SenderRejectedRequestException) {
                 return false;
               }
 
@@ -383,9 +386,9 @@ public class RegistrationService {
         builder.setVerifiedCode(verifiedCode);
       }
 
-      builder.setExpirationEpochMillis(getSessionExpiration(builder.build()).toEpochMilli());
-
-      return builder.build();
+      return getSessionExpiration(builder.build()).thenApply(expiration ->
+          builder.setExpirationEpochMillis(expiration.toEpochMilli()).build()
+      );
     });
   }
 
@@ -397,81 +400,86 @@ public class RegistrationService {
    *
    * @return session metadata suitable for presentation to remote callers
    */
-  public RegistrationSessionMetadata buildSessionMetadata(final RegistrationSession session) {
+  public CompletionStage<RegistrationSessionMetadata> buildSessionMetadata(final RegistrationSession session) {
     final boolean verified = StringUtils.isNotBlank(session.getVerifiedCode());
 
-    final RegistrationSessionMetadata.Builder sessionMetadataBuilder = RegistrationSessionMetadata.newBuilder()
-        .setSessionId(session.getId())
-        .setE164(Long.parseLong(StringUtils.removeStart(session.getPhoneNumber(), "+")))
-        .setVerified(verified)
-        .setExpirationSeconds(Duration.between(clock.instant(), getSessionExpiration(session)).getSeconds());
+    final CompletionStage<RegistrationSessionMetadata.Builder> sessionMetadataBuilderFuture = getSessionExpiration(session)
+        .thenApply(expiration -> RegistrationSessionMetadata.newBuilder()
+            .setSessionId(session.getId())
+            .setE164(Long.parseLong(StringUtils.removeStart(session.getPhoneNumber(), "+")))
+            .setVerified(verified)
+            .setExpirationSeconds(Duration.between(clock.instant(), expiration).getSeconds()));
 
     final Instant currentTime = clock.instant();
-    final NextActionTimes nextActionTimes = getNextActionTimes(session);
+    return getNextActionTimes(session)
+        .thenCombine(sessionMetadataBuilderFuture, (nextActionTimes, sessionMetadataBuilder) -> {
 
-    nextActionTimes.nextSms().ifPresent(nextAction -> {
-      sessionMetadataBuilder.setMayRequestSms(true);
-      sessionMetadataBuilder.setNextSmsSeconds(
-          nextAction.isBefore(currentTime) ? 0 : Duration.between(currentTime, nextAction).toSeconds());
-    });
+          nextActionTimes.nextSms().ifPresent(nextAction -> {
+            sessionMetadataBuilder.setMayRequestSms(true);
+            sessionMetadataBuilder.setNextSmsSeconds(
+                nextAction.isBefore(currentTime) ? 0 : Duration.between(currentTime, nextAction).toSeconds());
+          });
 
-    nextActionTimes.nextVoiceCall().ifPresent(nextAction -> {
-      sessionMetadataBuilder.setMayRequestVoiceCall(true);
-      sessionMetadataBuilder.setNextVoiceCallSeconds(
-          nextAction.isBefore(currentTime) ? 0 : Duration.between(currentTime, nextAction).toSeconds());
-    });
+          nextActionTimes.nextVoiceCall().ifPresent(nextAction -> {
+            sessionMetadataBuilder.setMayRequestVoiceCall(true);
+            sessionMetadataBuilder.setNextVoiceCallSeconds(
+                nextAction.isBefore(currentTime) ? 0 : Duration.between(currentTime, nextAction).toSeconds());
+          });
 
-    nextActionTimes.nextCodeCheck().ifPresent(nextAction -> {
-      sessionMetadataBuilder.setMayCheckCode(true);
-      sessionMetadataBuilder.setNextCodeCheckSeconds(
-          nextAction.isBefore(currentTime) ? 0 : Duration.between(currentTime, nextAction).toSeconds());
-    });
+          nextActionTimes.nextCodeCheck().ifPresent(nextAction -> {
+            sessionMetadataBuilder.setMayCheckCode(true);
+            sessionMetadataBuilder.setNextCodeCheckSeconds(
+                nextAction.isBefore(currentTime) ? 0 : Duration.between(currentTime, nextAction).toSeconds());
+          });
 
-    return sessionMetadataBuilder.build();
+          return sessionMetadataBuilder.build();
+        });
   }
 
   @VisibleForTesting
-  Instant getSessionExpiration(final RegistrationSession session) {
-    final Instant expiration;
+  CompletionStage<Instant> getSessionExpiration(final RegistrationSession session) {
+    final CompletionStage<Instant> expiration;
 
     if (StringUtils.isBlank(session.getVerifiedCode())) {
       final List<Instant> candidateExpirations = new ArrayList<>(session.getRegistrationAttemptsList().stream()
           .map(attempt -> Instant.ofEpochMilli(attempt.getExpirationEpochMillis()))
           .toList());
 
-      final NextActionTimes nextActionTimes = getNextActionTimes(session);
+      expiration = getNextActionTimes(session).thenApply(nextActionTimes -> {
+        nextActionTimes.nextSms()
+            .map(nextAction -> nextAction.plus(SESSION_TTL_AFTER_LAST_ACTION))
+            .ifPresent(candidateExpirations::add);
 
-      nextActionTimes.nextSms()
-          .map(nextAction -> nextAction.plus(SESSION_TTL_AFTER_LAST_ACTION))
-          .ifPresent(candidateExpirations::add);
+        nextActionTimes.nextVoiceCall()
+            .map(nextAction -> nextAction.plus(SESSION_TTL_AFTER_LAST_ACTION))
+            .ifPresent(candidateExpirations::add);
 
-      nextActionTimes.nextVoiceCall()
-          .map(nextAction -> nextAction.plus(SESSION_TTL_AFTER_LAST_ACTION))
-          .ifPresent(candidateExpirations::add);
+        nextActionTimes.nextCodeCheck()
+            .map(nextAction -> nextAction.plus(SESSION_TTL_AFTER_LAST_ACTION))
+            .ifPresent(candidateExpirations::add);
 
-      nextActionTimes.nextCodeCheck()
-          .map(nextAction -> nextAction.plus(SESSION_TTL_AFTER_LAST_ACTION))
-          .ifPresent(candidateExpirations::add);
+        // If a session never has a successful registration attempt and exhausts all SMS and voice ratelimits,
+        // fall back to the expiration set at session creation time
+        return candidateExpirations.stream().max(Comparator.naturalOrder())
+            .orElse(Instant.ofEpochMilli(session.getExpirationEpochMillis()));
+      });
 
-      // If a session never has a successful registration attempt and exhausts all SMS and voice ratelimits,
-      // fall back to the expiration set at session creation time
-      expiration = candidateExpirations.stream().max(Comparator.naturalOrder())
-              .orElse(Instant.ofEpochMilli(session.getExpirationEpochMillis()));
     } else {
       // The session must have been verified as a result of the last check
-      expiration = Instant.ofEpochMilli(session.getLastCheckCodeAttemptEpochMillis()).plus(SESSION_TTL_AFTER_LAST_ACTION);
+      expiration = CompletableFuture.completedFuture(
+          Instant.ofEpochMilli(session.getLastCheckCodeAttemptEpochMillis()).plus(SESSION_TTL_AFTER_LAST_ACTION));
     }
 
     return expiration;
   }
 
   @VisibleForTesting
-  NextActionTimes getNextActionTimes(final RegistrationSession session) {
+  CompletionStage<NextActionTimes> getNextActionTimes(final RegistrationSession session) {
     final boolean verified = StringUtils.isNotBlank(session.getVerifiedCode());
 
-    Optional<Instant> nextSms = Optional.empty();
-    Optional<Instant> nextVoiceCall = Optional.empty();
-    Optional<Instant> nextCodeCheck = Optional.empty();
+    Mono<Optional<Instant>> nextSms = Mono.just(Optional.empty());
+    Mono<Optional<Instant>> nextVoiceCall = Mono.just(Optional.empty());
+    Mono<Optional<Instant>> nextCodeCheck = Mono.just(Optional.empty());
 
     // If the session is already verified, callers can't request or check more verification codes
     if (!verified) {
@@ -483,13 +491,13 @@ public class RegistrationService {
                 .getExpirationEpochMillis());
 
         if (!clock.instant().isAfter(currentAttemptExpiration)) {
-          nextCodeCheck = checkVerificationCodePerSessionRateLimiter.getTimeOfNextAction(session).join();
+          nextCodeCheck = Mono.fromFuture(checkVerificationCodePerSessionRateLimiter.getTimeOfNextAction(session));
         }
       }
 
       // Callers can't request more verification codes if they've exhausted their check attempts (since they can't check
       // any new codes they might receive)
-      nextSms = sendSmsVerificationCodePerSessionRateLimiter.getTimeOfNextAction(session).join();
+      nextSms = Mono.fromFuture(sendSmsVerificationCodePerSessionRateLimiter.getTimeOfNextAction(session));
 
       // Callers may not request codes via phone call until they've attempted an SMS
       final boolean hasAttemptedSms = session.getRegistrationAttemptsList().stream().anyMatch(attempt ->
@@ -500,11 +508,13 @@ public class RegistrationService {
                       && attempt.getFailedSendReason() != FailedSendReason.FAILED_SEND_REASON_SUSPECTED_FRAUD);
 
       if (hasAttemptedSms) {
-        nextVoiceCall = sendVoiceVerificationCodePerSessionRateLimiter.getTimeOfNextAction(session).join();
+        nextVoiceCall = Mono.fromFuture(sendVoiceVerificationCodePerSessionRateLimiter.getTimeOfNextAction(session));
       }
     }
 
-    return new NextActionTimes(nextSms, nextVoiceCall, nextCodeCheck);
+    return Mono.zip(nextSms, nextVoiceCall, nextCodeCheck)
+        .map(zipped -> new NextActionTimes(zipped.getT1(), zipped.getT2(), zipped.getT3()))
+        .toFuture();
   }
 
   private Phonenumber.PhoneNumber getPhoneNumberFromSession(final RegistrationSession session) throws CompletionException {

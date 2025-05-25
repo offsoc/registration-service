@@ -34,6 +34,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -153,7 +154,7 @@ class BigtableSessionRepositoryTest extends AbstractSessionRepositoryTest {
         .thenReturn(ApiFutures.immediateFuture(false))
         .thenReturn(ApiFutures.immediateFuture(true));
 
-    assertDoesNotThrow(() -> retryRepository.updateSession(sessionId, s -> s, 2).join());
+    assertDoesNotThrow(() -> retryRepository.updateSession(sessionId, CompletableFuture::completedFuture, 2).join());
 
     verify(mockBigtableClient, times(2)).checkAndMutateRowAsync(any());
   }
@@ -184,7 +185,7 @@ class BigtableSessionRepositoryTest extends AbstractSessionRepositoryTest {
         .thenReturn(ApiFutures.immediateFuture(false));
 
     assertThrows(RuntimeException.class,
-        () -> retryRepository.updateSession(sessionId, s -> s, 3).join());
+        () -> retryRepository.updateSession(sessionId, CompletableFuture::completedFuture, 3).join());
 
     // We expect one call for the initial attempt, then one for each retry
     verify(mockBigtableClient, times(BigtableSessionRepository.MAX_UPDATE_RETRIES + 1)).checkAndMutateRowAsync(any());

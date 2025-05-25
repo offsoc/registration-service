@@ -26,7 +26,7 @@ public record MessageBirdVoiceConfiguration(
     @Nullable List<@NotBlank String> supportedLanguages) {
 
   // See https://developers.messagebird.com/api/voice-messaging/#the-voice-message-object
-  private static List<String> DEFAULT_SUPPORTED_LANGUAGES = List.of(
+  private static final List<String> DEFAULT_SUPPORTED_LANGUAGES = List.of(
       "cy-gb",
       "da-dk",
       "de-de",

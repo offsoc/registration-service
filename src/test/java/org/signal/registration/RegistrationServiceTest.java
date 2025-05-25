@@ -611,6 +611,31 @@ class RegistrationServiceTest {
     verify(sessionRepository, never()).updateSession(any(), any());
   }
 
+  @Test
+  void checkVerificationCodeSenderRejected() {
+    final AttemptData attemptData = new AttemptData(Optional.of("test"), VERIFICATION_CODE_BYTES);
+
+    when(sender.sendVerificationCode(MessageTransport.SMS, PHONE_NUMBER, LANGUAGE_RANGES, CLIENT_TYPE))
+        .thenReturn(CompletableFuture.completedFuture(attemptData));
+
+    final UUID sessionId;
+    {
+      final RegistrationSession session = registrationService.createRegistrationSession(PHONE_NUMBER, "", SESSION_METADATA).join();
+      sessionId = UUIDUtil.uuidFromByteString(session.getId());
+
+      registrationService.sendVerificationCode(MessageTransport.SMS, sessionId, SENDER_NAME, LANGUAGE_RANGES, CLIENT_TYPE).join();
+    }
+
+    when(sender.checkVerificationCode(VERIFICATION_CODE, VERIFICATION_CODE_BYTES))
+        .thenReturn(CompletableFuture.failedFuture(new CompletionException(new SenderRejectedRequestException("sender rejected"))));
+
+    final RegistrationSession session = registrationService.checkVerificationCode(sessionId, VERIFICATION_CODE).join();
+
+    assertTrue(session.getVerifiedCode().isEmpty());
+    assertEquals(1, session.getCheckCodeAttempts());
+    assertEquals(CURRENT_TIME.toEpochMilli(), session.getLastCheckCodeAttemptEpochMillis());
+  }
+
   @ParameterizedTest
   @MethodSource
   void getNextActionTimes(final RegistrationSession session,
@@ -641,7 +666,7 @@ class RegistrationServiceTest {
             : Optional.empty()));
 
     final RegistrationService.NextActionTimes nextActionTimes =
-        registrationService.getNextActionTimes(session);
+        registrationService.getNextActionTimes(session).toCompletableFuture().join();
 
     assertEquals(expectNextSms ? Optional.of(CURRENT_TIME.plusSeconds(nextSmsSeconds)) : Optional.empty(),
         nextActionTimes.nextSms());
@@ -683,7 +708,7 @@ class RegistrationServiceTest {
             : Optional.empty()));
 
     final RegistrationSessionMetadata sessionMetadata =
-        registrationService.buildSessionMetadata(session);
+        registrationService.buildSessionMetadata(session).toCompletableFuture().join();
 
     assertEquals(session.getId(), sessionMetadata.getSessionId());
     assertEquals(
@@ -821,7 +846,7 @@ class RegistrationServiceTest {
             .build())
         .build();
 
-    final RegistrationSessionMetadata metadata = registrationService.buildSessionMetadata(session);
+    final RegistrationSessionMetadata metadata = registrationService.buildSessionMetadata(session).toCompletableFuture().join();
 
     assertTrue(metadata.getMayRequestSms());
     assertEquals(0, metadata.getNextSmsSeconds());
@@ -886,7 +911,8 @@ class RegistrationServiceTest {
             .build())
         .forEach(sessionBuilder::addRegistrationAttempts);
 
-    assertEquals(expectedExpiration, registrationService.getSessionExpiration(sessionBuilder.build()));
+    assertEquals(expectedExpiration,
+        registrationService.getSessionExpiration(sessionBuilder.build()).toCompletableFuture().join());
   }
 
   private static Stream<Arguments> getSessionExpiration() {

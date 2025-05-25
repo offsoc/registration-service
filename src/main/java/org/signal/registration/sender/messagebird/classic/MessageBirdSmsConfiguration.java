@@ -1,3 +1,8 @@
+/*
+ * Copyright 2022 Signal Messenger, LLC
+ * SPDX-License-Identifier: AGPL-3.0-only
+ */
+
 package org.signal.registration.sender.messagebird.classic;
 
 import io.micronaut.context.annotation.ConfigurationProperties;
@@ -7,7 +12,6 @@ import jakarta.validation.constraints.NotNull;
 import java.time.Duration;
 
 /**
- * @param originator The originating number or sender id for MessageBird SMS attempts
  * @param sessionTtl How long verification sessions are valid for
  */
 @Context

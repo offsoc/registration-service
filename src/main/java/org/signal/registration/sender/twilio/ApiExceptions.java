@@ -16,6 +16,8 @@ import org.signal.registration.sender.SenderInvalidParametersException;
 import org.signal.registration.sender.SenderRejectedRequestException;
 import org.signal.registration.sender.SenderRejectedTransportException;
 import org.signal.registration.util.CompletionExceptions;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class ApiExceptions {
 
@@ -52,6 +54,7 @@ public class ApiExceptions {
   );
 
   private static final Duration EXTERNAL_RETRY_INTERVAL = Duration.ofMinutes(1);
+  private static final Logger log = LoggerFactory.getLogger(ApiExceptions.class);
 
   private ApiExceptions() {}
 
@@ -63,7 +66,13 @@ public class ApiExceptions {
     }
 
     if (unwrapped instanceof ApiException apiException) {
-      return String.valueOf(apiException.getCode());
+      if (apiException.getCode() != null) {
+        return String.valueOf(apiException.getCode());
+      } else if (apiException.getStatusCode() != null) {
+        return "http_" + apiException.getStatusCode();
+      } else {
+        log.warn("Received twilio exception with no error code or HTTP status", apiException);
+      }
     }
 
     return null;
@@ -71,10 +80,9 @@ public class ApiExceptions {
 
   public static boolean isRetriable(@NotNull final Throwable throwable) {
     final Throwable unwrapped = CompletionExceptions.unwrap(throwable);
-    if (unwrapped instanceof ApiException apiException) {
-      return INTERNAL_RETRY_ERROR_CODES.contains(apiException.getCode());
-    }
-    return false;
+    return unwrapped instanceof ApiException apiException
+        && apiException.getCode() != null
+        && INTERNAL_RETRY_ERROR_CODES.contains(apiException.getCode());
   }
 
   private static Optional<SenderInvalidParametersException.ParamName> extractInvalidParameter(
@@ -109,7 +117,9 @@ public class ApiExceptions {
    */
   public static Throwable toSenderException(final Throwable throwable) {
     if (CompletionExceptions.unwrap(throwable) instanceof ApiException apiException) {
-      if (INVALID_PARAM_ERROR_CODE == apiException.getCode()) {
+      if (apiException.getCode() == null) {
+        return apiException;
+      } else if (INVALID_PARAM_ERROR_CODE == apiException.getCode()) {
         return new SenderInvalidParametersException(throwable, extractInvalidParameter(apiException));
       } else if (SUSPECTED_FRAUD_ERROR_CODES.contains(apiException.getCode())) {
         return new SenderFraudBlockException(throwable);

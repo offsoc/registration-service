@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 import org.signal.registration.Environments;
@@ -92,7 +93,7 @@ public class MemorySessionRepository implements SessionRepository {
 
   @Override
   public CompletableFuture<RegistrationSession> updateSession(final UUID sessionId,
-      final Function<RegistrationSession, RegistrationSession> sessionUpdater) {
+      final Function<RegistrationSession, CompletionStage<RegistrationSession>> sessionUpdater) {
 
     final RegistrationSession updatedSession =
         sessionsById.computeIfPresent(sessionId, (id, existingSession) -> {
@@ -100,7 +101,7 @@ public class MemorySessionRepository implements SessionRepository {
             sessionCompletedEventPublisher.publishEventAsync(new SessionCompletedEvent(existingSession));
             return null;
           } else {
-            return sessionUpdater.apply(existingSession);
+            return sessionUpdater.apply(existingSession).toCompletableFuture().join();
           }
         });
 

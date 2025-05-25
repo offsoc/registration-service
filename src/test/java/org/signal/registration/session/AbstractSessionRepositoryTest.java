@@ -5,10 +5,11 @@
 
 package org.signal.registration.session;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -18,7 +19,9 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -54,7 +57,7 @@ public abstract class AbstractSessionRepositoryTest {
 
     assertNotNull(createdSession);
     assertNotNull(createdSession.getId());
-    assertTrue(createdSession.getId().size() > 0);
+    assertFalse(createdSession.getId().isEmpty());
 
     final RegistrationSession expectedSession = RegistrationSession.newBuilder()
         .setId(createdSession.getId())
@@ -75,7 +78,7 @@ public abstract class AbstractSessionRepositoryTest {
       final CompletionException completionException =
           assertThrows(CompletionException.class, () -> repository.getSession(UUID.randomUUID()).join());
 
-      assertTrue(completionException.getCause() instanceof SessionNotFoundException);
+      assertInstanceOf(SessionNotFoundException.class, completionException.getCause());
     }
 
     {
@@ -99,18 +102,18 @@ public abstract class AbstractSessionRepositoryTest {
     final Instant expiration = clock.instant().plus(TTL);
     final Instant expirationAfterUpdate = expiration.plusSeconds(17);
 
-    final Function<RegistrationSession, RegistrationSession> updateVerifiedCodeFunction =
-        session -> session.toBuilder()
+    final Function<RegistrationSession, CompletionStage<RegistrationSession>> updateVerifiedCodeFunction =
+        session -> CompletableFuture.completedFuture(session.toBuilder()
             .setVerifiedCode(verificationCode)
             .setExpirationEpochMillis(expirationAfterUpdate.toEpochMilli())
-            .build();
+            .build());
 
     {
       final CompletionException completionException =
           assertThrows(CompletionException.class,
               () -> repository.updateSession(UUID.randomUUID(), updateVerifiedCodeFunction).join());
 
-      assertTrue(completionException.getCause() instanceof SessionNotFoundException);
+      assertInstanceOf(SessionNotFoundException.class, completionException.getCause());
     }
 
     {

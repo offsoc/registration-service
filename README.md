@@ -1,16 +1,19 @@
-# Signal registration service
+Signal registration service
+===========================
 
 This is a multi-provider phone number verification service for use with Signal.
 
 When Signal users first create an account, they do so by associating that account with a phone number. Signal verifies that users actually control that phone number by sending a verification code to that number via SMS or via a phone call. This service manages the process of sending verification codes and checking codes provided by clients.
 
-## Major components
+Major components
+----------------
 
 External callers interact with this service by sending [gRPC](https://grpc.io/) requests. The gRPC interface is defined in [`registration_service.proto`](./src/main/proto/registration_service.proto). gRPC requests are handled by [`RegistrationServiceGrpcEndpoint`](./src/main/java/org/signal/registration/rpc/RegistrationServiceGrpcEndpoint.java), which sanitizes client input and dispatches requests to [`RegistrationService`](./src/main/java/org/signal/registration/RegistrationService.java), which orchestrates the major business logic for the entire service.
 
 `RegistrationService` uses a [`SenderSelectionStrategy`](./src/main/java/org/signal/registration/sender/SenderSelectionStrategy.java) to choose a concrete [`VerificationCodeSender`](./src/main/java/org/signal/registration/sender/VerificationCodeSender.java) implementation to send a verification code to a client. `VerificationCodeSenders` are responsible for sending verification codes via a specific transport (i.e. SMS or voice) and service provider and later for verifying codes provided by clients. A [`SessionRepository`](./src/main/java/org/signal/registration/session/SessionRepository.java) stores session data (i.e. verification codes or references to external verification sessions) for `VerificationCodeSenders`.
 
-## Configuration
+Configuration
+-------------
 
 At a minimum, the registration service needs at least one `VerificationCodeSender`, a `SenderSelectionStrategy`, and a `SessionRepository`. No beans of those types will be instantiated unless they're configured, and so some configuration properties must be provided. The following table describes the currently-supported (and required, in production environments) configuration properties.
 
@@ -69,7 +72,8 @@ At a minimum, the registration service needs at least one `VerificationCodeSende
 | `verification.sms.message-variants-by-region`                          | A map of two-letter region codes (e.g. "US") to names of SMS message variants; message variants should have corresponding entries in the SMS message string table                                                                                                        |
 | `verification.[transport].supported-languages`                         | A list of [BCP 47](https://www.rfc-editor.org/rfc/rfc4646.txt) language tags for which translations of a verification SMS message sent via the Twilio Programmable Messaging API are available                                                                           |
 
-### Running in development mode
+Running in development mode
+---------------------------
 
 For local testing, this service can be run in the `dev` [Micronaut environment](https://docs.micronaut.io/latest/guide/#environments). In the `dev` environment, the following components are provided (assuming no others of have been configured):
 
@@ -85,7 +89,8 @@ To run the registration service locally with the `dev` environment enabled:
 ./mvnw mn:run -Dmicronaut.environments=dev
 ```
 
-## Testing with command-line tools
+Testing with command-line tools
+-------------------------------
 
 The registration service include a set of CLI tools to facilitate testing and development. The tools allow operators to create and inspect registration sessions, send verification codes, and check verification codes.
 
@@ -159,3 +164,23 @@ java -cp target/registration-service-0.1.jar org.signal.registration.cli.Registr
   --plaintext \
   check-verification-code 2a3d2a2a41ff41fb9ce41687ddcc51a4 550123
 ```
+
+Contributing bug reports
+------------------------
+
+We use [GitHub][github issues] for bug tracking. Security issues should be sent to <a href="mailto:security@signal.org">security@signal.org</a>.
+
+Help
+----
+
+We cannot provide direct technical support. Get help running this software in your own environment in our [unofficial community forum][community forum].
+
+License
+-------
+
+Copyright 2022 Signal Messenger, LLC
+
+Licensed under the AGPLv3: https://www.gnu.org/licenses/agpl-3.0.html
+
+[github issues]: https://github.com/signalapp/registration-service/issues
+[community forum]: https://community.signalusers.org

@@ -1,9 +1,0 @@
-syntax = "proto3";
-
-option java_multiple_files = true;
-
-package org.signal.registration.sender.messagebird;
-
-message MessageBirdVerifySessionData {
-  string verification_id = 1;
-}
