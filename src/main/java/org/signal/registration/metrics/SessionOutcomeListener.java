@@ -86,12 +86,16 @@ public class SessionOutcomeListener implements ApplicationEventListener<SessionC
             .increment();
       }
 
-      meterRegistry.counter(SESSIONS_COUNTER_NAME,
-              MetricsUtil.VERIFIED_TAG_NAME, String.valueOf(sessionVerified),
-              MetricsUtil.COUNTRY_CODE_TAG_NAME, String.valueOf(phoneNumber.getCountryCode()),
-              MetricsUtil.REGION_CODE_TAG_NAME, Optional.ofNullable(PhoneNumberUtil.getInstance().getRegionCodeForNumber(phoneNumber))
-                  .orElse("XX"))
-          .increment();
+      // We consider a session completed only if it had a valid attempt
+      if (session.getRegistrationAttemptsCount() > 0) {
+        meterRegistry.counter(SESSIONS_COUNTER_NAME,
+                MetricsUtil.VERIFIED_TAG_NAME, String.valueOf(sessionVerified),
+                MetricsUtil.COUNTRY_CODE_TAG_NAME, String.valueOf(phoneNumber.getCountryCode()),
+                MetricsUtil.REGION_CODE_TAG_NAME,
+                Optional.ofNullable(PhoneNumberUtil.getInstance().getRegionCodeForNumber(phoneNumber))
+                    .orElse("XX"))
+            .increment();
+      }
 
     } catch (final NumberParseException e) {
       logger.warn("Failed to parse phone number from completed session", e);
