@@ -31,7 +31,7 @@
     <testcontainers.version>1.21.2</testcontainers.version>
 
     <!-- eclipse-temurin:21-jre-jammy (note: always use the multi-arch manifest *LIST* here); see https://hub.docker.com/_/eclipse-temurin -->
-    <docker.image.sha256>02fc89fa8766a9ba221e69225f8d1c10bb91885ddbd3c112448e23488ba40ab6</docker.image.sha256>
+    <docker.image.sha256>034ce51c134cb9abcf28e2bda88fa36ac51369bb26351d697297e81caa9a5d76</docker.image.sha256>
   </properties>
 
   <repositories>
