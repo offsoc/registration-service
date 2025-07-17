@@ -5,34 +5,6 @@
 
 package org.signal.registration.ratelimit.redis;
 
-import io.lettuce.core.FlushMode;
-import io.lettuce.core.RedisClient;
-import io.lettuce.core.RedisException;
-import io.lettuce.core.RedisFuture;
-import io.lettuce.core.RedisURI;
-import io.lettuce.core.ScriptOutputType;
-import io.lettuce.core.api.StatefulRedisConnection;
-import io.lettuce.core.api.async.RedisAsyncCommands;
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
-import io.micronaut.core.io.socket.SocketUtils;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.signal.registration.ratelimit.LeakyBucketRateLimiterConfiguration;
-import org.signal.registration.ratelimit.RateLimitExceededException;
-import org.signal.registration.util.CompletionExceptions;
-import redis.embedded.RedisServer;
-
-import java.time.Clock;
-import java.time.Duration;
-import java.time.Instant;
-import java.time.temporal.ChronoUnit;
-import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
-
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -43,9 +15,36 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import com.redis.testcontainers.RedisContainer;
+import io.lettuce.core.FlushMode;
+import io.lettuce.core.RedisClient;
+import io.lettuce.core.RedisException;
+import io.lettuce.core.RedisFuture;
+import io.lettuce.core.RedisURI;
+import io.lettuce.core.ScriptOutputType;
+import io.lettuce.core.api.StatefulRedisConnection;
+import io.lettuce.core.api.async.RedisAsyncCommands;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.signal.registration.ratelimit.LeakyBucketRateLimiterConfiguration;
+import org.signal.registration.ratelimit.RateLimitExceededException;
+import org.signal.registration.util.CompletionExceptions;
+import org.testcontainers.utility.DockerImageName;
+
 class RedisLeakyBucketRateLimiterTest {
 
-  private static RedisServer redisServer;
+  private static RedisContainer redisContainer;
 
   private RedisClient redisClient;
   private StatefulRedisConnection<String, String> redisConnection;
@@ -84,13 +83,14 @@ class RedisLeakyBucketRateLimiterTest {
 
   @BeforeAll
   static void setUpBeforeAll() {
-    redisServer = new RedisServer(SocketUtils.findAvailableTcpPort());
-    redisServer.start();
+    // redis:6.2-alpine; please see https://hub.docker.com/layers/library/redis/6.2-alpine/images/sha256-00d4e3a0f38c4077263437a82876e719d9c2b70e4cc3dbf6654fffc3b049f5e1
+    redisContainer = new RedisContainer(DockerImageName.parse("redis@sha256:347c20744e594ba14dd9768363621ac3f3e26d28085dccc01fb3acf757c9b84a"));
+    redisContainer.start();
   }
 
   @BeforeEach
   void setUp() {
-    redisClient = RedisClient.create(RedisURI.create("localhost", redisServer.ports().get(0)));
+    redisClient = RedisClient.create(RedisURI.create(redisContainer.getRedisURI()));
     redisConnection = redisClient.connect();
 
     redisConnection.sync().flushall(FlushMode.SYNC);
@@ -111,7 +111,7 @@ class RedisLeakyBucketRateLimiterTest {
 
   @AfterAll
   static void tearDownAfterAll() {
-    redisServer.stop();
+    redisContainer.stop();
   }
 
   @Test
