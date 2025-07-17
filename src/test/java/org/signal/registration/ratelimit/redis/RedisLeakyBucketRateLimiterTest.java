@@ -148,7 +148,7 @@ class RedisLeakyBucketRateLimiterTest {
           assertThrows(CompletionException.class, () -> rateLimiter.checkRateLimit("test").join(),
               "Checking a rate limit twice immediately should trigger the cooldown period");
 
-      assertTrue(CompletionExceptions.unwrap(completionException) instanceof RateLimitExceededException);
+      assertInstanceOf(RateLimitExceededException.class, CompletionExceptions.unwrap(completionException));
 
       final RateLimitExceededException rateLimitExceededException =
           (RateLimitExceededException) CompletionExceptions.unwrap(completionException);
@@ -187,14 +187,14 @@ class RedisLeakyBucketRateLimiterTest {
 
   @Test
   void checkRateLimitRedisException() {
-    final RedisFuture<Object> failedFuture = mock(RedisFuture.class);
+    @SuppressWarnings("unchecked") final RedisFuture<Object> failedFuture = mock(RedisFuture.class);
     when(failedFuture.toCompletableFuture()).thenReturn(CompletableFuture.failedFuture(new RedisException("Test")));
 
-    final RedisAsyncCommands<String, String> failureProneCommands = mock(RedisAsyncCommands.class);
+    @SuppressWarnings("unchecked") final RedisAsyncCommands<String, String> failureProneCommands = mock(RedisAsyncCommands.class);
     when(failureProneCommands.evalsha(anyString(), any(ScriptOutputType.class), any(String[].class),
         any(String[].class))).thenReturn(failedFuture);
 
-    final StatefulRedisConnection<String, String> failureProneConnection = mock(StatefulRedisConnection.class);
+    @SuppressWarnings("unchecked") final StatefulRedisConnection<String, String> failureProneConnection = mock(StatefulRedisConnection.class);
     when(failureProneConnection.async()).thenReturn(failureProneCommands);
 
     final RedisLeakyBucketRateLimiter<String> failOpenLimiter = new TestRedisLeakyBucketRateLimiter(failureProneConnection, clock,
@@ -210,6 +210,6 @@ class RedisLeakyBucketRateLimiterTest {
     final CompletionException completionException =
         assertThrows(CompletionException.class, () -> failClosedLimiter.checkRateLimit("fail-closed").join());
 
-    assertTrue(CompletionExceptions.unwrap(completionException) instanceof RateLimitExceededException);
+    assertInstanceOf(RateLimitExceededException.class, CompletionExceptions.unwrap(completionException));
   }
 }
