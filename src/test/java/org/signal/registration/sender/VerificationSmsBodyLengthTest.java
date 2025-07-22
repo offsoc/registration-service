@@ -21,6 +21,7 @@ import java.util.Arrays;
 import java.util.Objects;
 import java.util.Properties;
 import java.util.stream.Stream;
+import org.apache.commons.lang3.StringUtils;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -74,7 +75,13 @@ class VerificationSmsBodyLengthTest {
             throw new UncheckedIOException(e);
           }
 
-          return properties.keySet().stream().map(key -> Arguments.of(file, key));
+          return properties.keySet().stream().map(key -> {
+            final String testName = "%s: %s".formatted(
+                StringUtils.removeEnd(StringUtils.removeStart(file.getName(), "sms_"), ".properties"),
+                key);
+
+            return Arguments.argumentSet(testName, file, key);
+          });
         });
   }
 }
