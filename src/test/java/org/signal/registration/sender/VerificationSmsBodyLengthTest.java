@@ -21,6 +21,7 @@ import java.util.Arrays;
 import java.util.Objects;
 import java.util.Properties;
 import java.util.stream.Stream;
+import org.apache.commons.lang3.RandomStringUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -31,6 +32,9 @@ import threegpp.charset.ucs2.UCS2Charset80;
 class VerificationSmsBodyLengthTest {
 
   private static final int SMS_SEGMENT_LENGTH_OCTETS = 140;
+
+  private static final int VERIFICATION_CODE_DIGITS = 6;
+  private static final int APP_HASH_LENGTH = 11;
 
   private static final CharsetEncoder GSM7_ENCODER = new GSM7BitPackedCharset().newEncoder();
   private static final CharsetEncoder UCS2_ENCODER = new UCS2Charset80().newEncoder();
@@ -45,8 +49,8 @@ class VerificationSmsBodyLengthTest {
     }
 
     final String message = properties.getProperty(key)
-        .replace("{code}", "123456")
-        .replace("{appHash}", "12345678901");
+        .replace("{code}", RandomStringUtils.insecure().nextNumeric(VERIFICATION_CODE_DIGITS))
+        .replace("{appHash}", RandomStringUtils.insecure().nextAlphanumeric(APP_HASH_LENGTH));
 
     assertTrue(getEncodedMessageLengthOctets(message) <= SMS_SEGMENT_LENGTH_OCTETS);
   }
