@@ -54,9 +54,13 @@ class VerificationSmsBodyLengthTest {
   private static int getEncodedMessageLengthOctets(final String message) throws CharacterCodingException {
     if (GSM7_ENCODER.canEncode(message)) {
       return GSM7_ENCODER.encode(CharBuffer.wrap(message)).remaining();
-    } else {
-      return UCS2_ENCODER.encode(CharBuffer.wrap(message)).remaining();
+    } else if (UCS2_ENCODER.canEncode(message)) {
+      // We subtract 1 here because `threegpp.charset.ucs2.UCS2Charset80` prepends a header byte that's not actually
+      // needed for SMS.
+      return UCS2_ENCODER.encode(CharBuffer.wrap(message)).remaining() - 1;
     }
+
+    throw new IllegalArgumentException("No telecom encoder encodes message");
   }
 
   private static Stream<Arguments> messageFitsInSingleSMSSegment() throws URISyntaxException {
