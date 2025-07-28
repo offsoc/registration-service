@@ -266,6 +266,10 @@
       <artifactId>micronaut-micrometer-registry-datadog</artifactId>
     </dependency>
     <dependency>
+      <groupId>io.micronaut.micrometer</groupId>
+      <artifactId>micronaut-micrometer-registry-otlp</artifactId>
+    </dependency>
+    <dependency>
       <groupId>io.micronaut.picocli</groupId>
       <artifactId>micronaut-picocli</artifactId>
       <version>${micronaut.picocli.version}</version>
