@@ -30,6 +30,12 @@
     <reactive.grpc.version>1.2.4</reactive.grpc.version>
     <testcontainers.version>1.21.2</testcontainers.version>
 
+    <!-- This overrides the grpc version in the micronaut-parent pom we inherit from. Micronaut 4.8.3 uses gRPC 1.69.1
+    which is runtime incompatible with google-cloud which brings in 1.71.0 libraries. Micronaut 4.9.0 uses an updated
+    gRPC, so when we update to that this line should be removed. However, Micronaut 4.9.0 also includes netty 4.2, which
+    is incompatible with google-cloud libraries, and a version that includes netty 4.2 is not currently available -->
+    <grpc.version>1.71.0</grpc.version>
+
     <!-- eclipse-temurin:21-jre-jammy (note: always use the multi-arch manifest *LIST* here); see https://hub.docker.com/_/eclipse-temurin -->
     <docker.image.sha256>034ce51c134cb9abcf28e2bda88fa36ac51369bb26351d697297e81caa9a5d76</docker.image.sha256>
   </properties>
