@@ -24,6 +24,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Stream;
+import org.apache.commons.lang3.RandomStringUtils;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -34,13 +35,15 @@ class VerificationSmsBodyProviderTest {
 
   private VerificationSmsConfiguration configuration;
 
+  private static final String ANDROID_APP_HASH = RandomStringUtils.insecure().nextAlphanumeric(11);
+
   private static final Phonenumber.PhoneNumber US_NUMBER = PhoneNumberUtil.getInstance().getExampleNumber("US");
   private static final Phonenumber.PhoneNumber CN_NUMBER = PhoneNumberUtil.getInstance().getExampleNumber("CN");
 
   @BeforeEach
   void setUp() {
     configuration = new VerificationSmsConfiguration();
-    configuration.setAndroidAppHash("app-hash");
+    configuration.setAndroidAppHash(ANDROID_APP_HASH);
     configuration.setSupportedLanguages(List.of("en"));
   }
 
@@ -54,6 +57,10 @@ class VerificationSmsBodyProviderTest {
         assertDoesNotThrow(() -> bodyProvider.getVerificationBody(phoneNumber, clientType, verificationCode, languageRanges));
 
     assertTrue(messageBody.contains(verificationCode));
+
+    if (clientType == ClientType.ANDROID_WITH_FCM) {
+      assertTrue(messageBody.contains(ANDROID_APP_HASH));
+    }
   }
 
   private static Stream<Arguments> getMessageBody() {
