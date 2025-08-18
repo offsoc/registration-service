@@ -30,6 +30,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junitpioneer.jupiter.cartesian.ArgumentSets;
+import org.junitpioneer.jupiter.cartesian.CartesianTest;
 
 class VerificationSmsBodyProviderTest {
 
@@ -139,5 +141,34 @@ class VerificationSmsBodyProviderTest {
     assertTrue(bodyProvider.supportsLanguage(Locale.LanguageRange.parse("fr")));
     assertTrue(bodyProvider.supportsLanguage(Locale.LanguageRange.parse("fr-CA")));
     assertTrue(bodyProvider.supportsLanguage(Locale.LanguageRange.parse("fr-FR")));
+  }
+
+  @CartesianTest
+  @CartesianTest.MethodFactory("rawMessage")
+  void rawMessage(final Locale locale, final String code) {
+    final VerificationSmsBodyProvider bodyProvider = new VerificationSmsBodyProvider(configuration,
+        new SimpleMeterRegistry());
+
+      final MessageSource.MessageContext messageContext = MessageSource.MessageContext.of(locale,
+          Collections.emptyMap());
+
+      final String rawMessage = bodyProvider.getMessageSource()
+          .getRequiredRawMessage(code, messageContext);
+
+    assertTrue(!rawMessage.contains("'") || rawMessage.contains("''"));
+  }
+
+  static ArgumentSets rawMessage() {
+
+    return ArgumentSets
+        // locale
+        .argumentsForFirstParameter(Locale.availableLocales())
+
+        // code
+        .argumentsForNextParameter(List.of(
+            VerificationSmsBodyProvider.IOS_MESSAGE_KEY,
+            VerificationSmsBodyProvider.ANDROID_MESSAGE_KEY,
+            VerificationSmsBodyProvider.GENERIC_MESSAGE_KEY
+        ));
   }
 }
