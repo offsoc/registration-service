@@ -144,21 +144,22 @@ class VerificationSmsBodyProviderTest {
   }
 
   @CartesianTest
-  @CartesianTest.MethodFactory("rawMessage")
-  void rawMessage(final Locale locale, final String code) {
+  @CartesianTest.MethodFactory("rawMessageQuoteCheck")
+  void rawMessageQuoteCheck(final Locale locale, final String code) {
     final VerificationSmsBodyProvider bodyProvider = new VerificationSmsBodyProvider(configuration,
         new SimpleMeterRegistry());
 
-      final MessageSource.MessageContext messageContext = MessageSource.MessageContext.of(locale,
-          Collections.emptyMap());
+    final MessageSource.MessageContext messageContext = MessageSource.MessageContext.of(locale,
+        Collections.emptyMap());
 
-      final String rawMessage = bodyProvider.getMessageSource()
-          .getRequiredRawMessage(code, messageContext);
+    final String rawMessage = bodyProvider.getMessageSource()
+        .getRequiredRawMessage(code, messageContext);
 
+    // until we have a use case, a single quote is probably a mistake and could break variable interpolation
     assertTrue(!rawMessage.contains("'") || rawMessage.contains("''"));
   }
 
-  static ArgumentSets rawMessage() {
+  static ArgumentSets rawMessageQuoteCheck() {
 
     return ArgumentSets
         // locale
