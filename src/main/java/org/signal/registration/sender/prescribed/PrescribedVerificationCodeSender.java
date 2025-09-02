@@ -11,6 +11,7 @@ import com.google.protobuf.InvalidProtocolBufferException;
 import io.micronaut.context.annotation.Requires;
 import io.micronaut.scheduling.annotation.Scheduled;
 import jakarta.inject.Singleton;
+import java.io.UncheckedIOException;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
@@ -77,32 +78,35 @@ public class PrescribedVerificationCodeSender implements VerificationCodeSender 
   }
 
   @Override
-  public CompletableFuture<AttemptData> sendVerificationCode(final MessageTransport messageTransport,
-                                                             final Phonenumber.PhoneNumber phoneNumber,
-                                                             final List<Locale.LanguageRange> languageRanges,
-                                                             final ClientType clientType) {
+  public AttemptData sendVerificationCode(final MessageTransport messageTransport,
+      final Phonenumber.PhoneNumber phoneNumber,
+      final List<Locale.LanguageRange> languageRanges,
+      final ClientType clientType)
+      throws SenderRejectedRequestException {
 
     final String verificationCode = prescribedVerificationCodes.get().get(phoneNumber);
 
-    return StringUtils.isNotBlank(verificationCode) ?
-        CompletableFuture.completedFuture(new AttemptData(Optional.empty(),
-            PrescribedVerificationCodeSessionData.newBuilder()
-                .setVerificationCode(verificationCode)
-                .build()
-                .toByteArray())) :
-        CompletableFuture.failedFuture(new SenderRejectedRequestException("Unsupported phone number"));
+    if (StringUtils.isNotBlank(verificationCode)) {
+      return new AttemptData(Optional.empty(),
+          PrescribedVerificationCodeSessionData.newBuilder()
+              .setVerificationCode(verificationCode)
+              .build()
+              .toByteArray());
+    }
+
+    throw new SenderRejectedRequestException("Unsupported phone number");
   }
 
   @Override
-  public CompletableFuture<Boolean> checkVerificationCode(final String verificationCode, final byte[] senderData) {
+  public boolean checkVerificationCode(final String verificationCode, final byte[] senderData) {
     try {
       final String expectedVerificationCode =
           PrescribedVerificationCodeSessionData.parseFrom(senderData).getVerificationCode();
 
-      return CompletableFuture.completedFuture(StringUtils.equals(verificationCode, expectedVerificationCode));
+      return StringUtils.equals(verificationCode, expectedVerificationCode);
     } catch (final InvalidProtocolBufferException e) {
       logger.error("Failed to parse stored session data", e);
-      return CompletableFuture.failedFuture(e);
+      throw new UncheckedIOException(e);
     }
   }
 }

@@ -7,7 +7,6 @@ package org.signal.registration.ratelimit;
 
 import java.time.Instant;
 import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
 
 /**
  * A rate limiter limits the number of times in some period of time that an action identified by a given key may be
@@ -27,15 +26,14 @@ public interface RateLimiter<K> {
    * before the current time, the action may be taken immediately, and if empty, no amount of simply waiting will allow
    * the action to succeed and callers may need to take some other action to proceed
    */
-  CompletableFuture<Optional<Instant>> getTimeOfNextAction(K key);
+  Optional<Instant> getTimeOfNextAction(K key);
 
   /**
    * Checks whether the action identified by the given key may be taken.
    *
    * @param key a key that identifies the action to be taken
    *
-   * @return a future that either completes normally (in which case the action is permitted) or fails with a
-   * {@link RateLimitExceededException} if the caller must wait before taking the action governed by this rate limiter
+   * @throws RateLimitExceededException if the caller must wait before taking the action governed by this rate limiter
    */
-  CompletableFuture<Void> checkRateLimit(K key);
+  void checkRateLimit(K key) throws RateLimitExceededException;
 }

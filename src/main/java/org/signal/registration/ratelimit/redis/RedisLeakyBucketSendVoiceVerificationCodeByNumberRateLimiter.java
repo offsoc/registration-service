@@ -12,8 +12,8 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micronaut.context.annotation.Requires;
 import jakarta.inject.Named;
 import jakarta.inject.Singleton;
-import org.signal.registration.ratelimit.LeakyBucketRateLimiterConfiguration;
 import java.time.Clock;
+import org.signal.registration.ratelimit.LeakyBucketRateLimiterConfiguration;
 
 @Singleton
 @Requires(bean = StatefulRedisConnection.class)

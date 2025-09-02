@@ -21,15 +21,12 @@ import jakarta.inject.Inject;
 import java.time.Duration;
 import java.util.Locale;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 import java.util.stream.Stream;
 import org.apache.commons.lang3.StringUtils;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
-import org.mockito.stubbing.Answer;
 import org.signal.registration.AttemptExpiredException;
 import org.signal.registration.NoVerificationCodeSentException;
 import org.signal.registration.RegistrationService;
@@ -51,13 +48,13 @@ class RegistrationServiceGrpcEndpointTest {
     final RegistrationService registrationService = mock(RegistrationService.class);
 
     when(registrationService.buildSessionMetadata(any()))
-        .thenAnswer((Answer<CompletionStage<RegistrationSessionMetadata>>) invocation -> {
+        .thenAnswer(invocation -> {
           final RegistrationSession session = invocation.getArgument(0, RegistrationSession.class);
 
-          return CompletableFuture.completedFuture(RegistrationSessionMetadata.newBuilder()
+          return RegistrationSessionMetadata.newBuilder()
               .setSessionId(session.getId())
               .setVerified(StringUtils.isNotBlank(session.getVerifiedCode()))
-              .build());
+              .build();
         });
 
     return registrationService;
@@ -70,7 +67,7 @@ class RegistrationServiceGrpcEndpointTest {
   private RegistrationService registrationService;
 
   @Test
-  void createSession() {
+  void createSession() throws RateLimitExceededException {
     final long e164 = 18005550123L;
     final UUID sessionId = UUID.randomUUID();
 
@@ -79,8 +76,7 @@ class RegistrationServiceGrpcEndpointTest {
         .setPhoneNumber("+" + e164)
         .build();
 
-    when(registrationService.createRegistrationSession(any(), anyString(), any()))
-        .thenReturn(CompletableFuture.completedFuture(session));
+    when(registrationService.createRegistrationSession(any(), anyString(), any())).thenReturn(session);
 
     final CreateRegistrationSessionResponse response =
         blockingStub.createSession(CreateRegistrationSessionRequest.newBuilder()
@@ -92,11 +88,11 @@ class RegistrationServiceGrpcEndpointTest {
   }
 
   @Test
-  void createSessionRateLimited() {
+  void createSessionRateLimited() throws RateLimitExceededException {
     final Duration retryAfter = Duration.ofSeconds(60);
 
     when(registrationService.createRegistrationSession(any(), anyString(), any()))
-        .thenReturn(CompletableFuture.failedFuture(new RateLimitExceededException(retryAfter)));
+        .thenThrow(new RateLimitExceededException(retryAfter));
 
     final CreateRegistrationSessionResponse response =
         blockingStub.createSession(CreateRegistrationSessionRequest.newBuilder()
@@ -120,13 +116,13 @@ class RegistrationServiceGrpcEndpointTest {
   }
 
   @Test
-  void getSessionMetadata() {
+  void getSessionMetadata() throws SessionNotFoundException {
     final UUID sessionId = UUID.randomUUID();
 
     when(registrationService.getRegistrationSession(sessionId))
-        .thenReturn(CompletableFuture.completedFuture(RegistrationSession.newBuilder()
+        .thenReturn(RegistrationSession.newBuilder()
             .setId(UUIDUtil.uuidToByteString(sessionId))
-            .build()));
+            .build());
 
     final GetRegistrationSessionMetadataResponse response =
         blockingStub.getSessionMetadata(GetRegistrationSessionMetadataRequest.newBuilder()
@@ -138,9 +134,9 @@ class RegistrationServiceGrpcEndpointTest {
   }
 
   @Test
-  void getSessionMetadataNotFound() {
+  void getSessionMetadataNotFound() throws SessionNotFoundException {
     when(registrationService.getRegistrationSession(any()))
-        .thenReturn(CompletableFuture.failedFuture(new SessionNotFoundException()));
+        .thenThrow(new SessionNotFoundException());
 
     final GetRegistrationSessionMetadataResponse response =
         blockingStub.getSessionMetadata(GetRegistrationSessionMetadataRequest.newBuilder()
@@ -155,13 +151,14 @@ class RegistrationServiceGrpcEndpointTest {
   }
 
   @Test
-  void sendVerificationCode() {
+  void sendVerificationCode()
+      throws SenderRejectedRequestException, SessionAlreadyVerifiedException, RateLimitExceededException, TransportNotAllowedException, SessionNotFoundException {
     final UUID sessionUuid = UUID.randomUUID();
 
     when(registrationService.sendVerificationCode(any(), any(), isNull(), any(), any()))
-        .thenReturn(CompletableFuture.completedFuture(RegistrationSession.newBuilder()
+        .thenReturn(RegistrationSession.newBuilder()
             .setId(UUIDUtil.uuidToByteString(sessionUuid))
-            .build()));
+            .build());
 
     final SendVerificationCodeResponse response =
         blockingStub.sendVerificationCode(SendVerificationCodeRequest.newBuilder()
@@ -179,9 +176,10 @@ class RegistrationServiceGrpcEndpointTest {
   }
 
   @Test
-  void sendVerificationCodeSenderRejected() {
+  void sendVerificationCodeSenderRejected()
+      throws SenderRejectedRequestException, SessionAlreadyVerifiedException, RateLimitExceededException, TransportNotAllowedException, SessionNotFoundException {
     when(registrationService.sendVerificationCode(any(), any(), any(), any(), any()))
-        .thenReturn(CompletableFuture.failedFuture(new SenderRejectedRequestException("Oh no!")));
+        .thenThrow(new SenderRejectedRequestException("Oh no!"));
 
     final SendVerificationCodeResponse response =
         blockingStub.sendVerificationCode(SendVerificationCodeRequest.newBuilder()
@@ -199,12 +197,12 @@ class RegistrationServiceGrpcEndpointTest {
   }
 
   @Test
-  void sendVerificationCodeRateLimited() {
+  void sendVerificationCodeRateLimited()
+      throws SenderRejectedRequestException, SessionAlreadyVerifiedException, RateLimitExceededException, TransportNotAllowedException, SessionNotFoundException {
     final Duration retryAfter = Duration.ofSeconds(79);
 
     when(registrationService.sendVerificationCode(any(), any(), any(), any(), any()))
-        .thenReturn(CompletableFuture.failedFuture(new RateLimitExceededException(retryAfter,
-            RegistrationSession.newBuilder().build())));
+        .thenThrow(new RateLimitExceededException(retryAfter, RegistrationSession.newBuilder().build()));
 
     final SendVerificationCodeResponse response =
         blockingStub.sendVerificationCode(SendVerificationCodeRequest.newBuilder()
@@ -223,9 +221,11 @@ class RegistrationServiceGrpcEndpointTest {
   }
 
   @Test
-  void sendVerificationCodeSessionNotFound() {
+  void sendVerificationCodeSessionNotFound()
+      throws SenderRejectedRequestException, SessionAlreadyVerifiedException, RateLimitExceededException, TransportNotAllowedException, SessionNotFoundException {
+
     when(registrationService.sendVerificationCode(any(), any(), any(), any(), any()))
-        .thenReturn(CompletableFuture.failedFuture(new SessionNotFoundException()));
+        .thenThrow(new SessionNotFoundException());
 
     final SendVerificationCodeResponse response =
         blockingStub.sendVerificationCode(SendVerificationCodeRequest.newBuilder()
@@ -243,10 +243,11 @@ class RegistrationServiceGrpcEndpointTest {
   }
 
   @Test
-  void sendVerificationCodeAlreadyVerified() {
+  void sendVerificationCodeAlreadyVerified()
+      throws SenderRejectedRequestException, SessionAlreadyVerifiedException, RateLimitExceededException, TransportNotAllowedException, SessionNotFoundException {
+
     when(registrationService.sendVerificationCode(any(), any(), any(), any(), any()))
-        .thenReturn(CompletableFuture.failedFuture(
-            new SessionAlreadyVerifiedException(RegistrationSession.newBuilder().build())));
+        .thenThrow(new SessionAlreadyVerifiedException(RegistrationSession.newBuilder().build()));
 
     final SendVerificationCodeResponse response =
         blockingStub.sendVerificationCode(SendVerificationCodeRequest.newBuilder()
@@ -264,10 +265,11 @@ class RegistrationServiceGrpcEndpointTest {
   }
 
   @Test
-  void sendVerificationCodeTransportNotAllowed() {
+  void sendVerificationCodeTransportNotAllowed()
+      throws SenderRejectedRequestException, SessionAlreadyVerifiedException, RateLimitExceededException, TransportNotAllowedException, SessionNotFoundException {
+
     when(registrationService.sendVerificationCode(any(), any(), any(), any(), any()))
-        .thenReturn(CompletableFuture.failedFuture(
-            new TransportNotAllowedException(new RuntimeException(), RegistrationSession.newBuilder().build())));
+        .thenThrow(new TransportNotAllowedException(new RuntimeException(), RegistrationSession.newBuilder().build()));
 
     final SendVerificationCodeResponse response =
         blockingStub.sendVerificationCode(SendVerificationCodeRequest.newBuilder()
@@ -285,15 +287,17 @@ class RegistrationServiceGrpcEndpointTest {
   }
 
   @Test
-  void checkVerificationCode() {
+  void checkVerificationCode()
+      throws NoVerificationCodeSentException, RateLimitExceededException, AttemptExpiredException, SessionNotFoundException {
+
     final UUID sessionId = UUID.randomUUID();
     final String verificationCode = "123456";
 
     when(registrationService.checkVerificationCode(sessionId, verificationCode))
-        .thenReturn(CompletableFuture.completedFuture(RegistrationSession.newBuilder()
+        .thenReturn(RegistrationSession.newBuilder()
             .setId(UUIDUtil.uuidToByteString(sessionId))
             .setVerifiedCode(verificationCode)
-            .build()));
+            .build());
 
     final CheckVerificationCodeResponse response =
         blockingStub.checkVerificationCode(CheckVerificationCodeRequest.newBuilder()
@@ -310,10 +314,10 @@ class RegistrationServiceGrpcEndpointTest {
   }
 
   @Test
-  void checkVerificationCodeNoCodeSent() {
+  void checkVerificationCodeNoCodeSent()
+      throws NoVerificationCodeSentException, RateLimitExceededException, AttemptExpiredException, SessionNotFoundException {
     when(registrationService.checkVerificationCode(any(), any()))
-        .thenReturn(CompletableFuture.failedFuture(
-            new NoVerificationCodeSentException(RegistrationSession.newBuilder().build())));
+        .thenThrow(new NoVerificationCodeSentException(RegistrationSession.newBuilder().build()));
 
     final CheckVerificationCodeResponse response =
         blockingStub.checkVerificationCode(CheckVerificationCodeRequest.newBuilder()
@@ -330,12 +334,12 @@ class RegistrationServiceGrpcEndpointTest {
   }
 
   @Test
-  void checkVerificationCodeRateLimited() {
+  void checkVerificationCodeRateLimited()
+      throws NoVerificationCodeSentException, RateLimitExceededException, AttemptExpiredException, SessionNotFoundException {
     final Duration retryAfter = Duration.ofSeconds(29);
 
     when(registrationService.checkVerificationCode(any(), any()))
-        .thenReturn(CompletableFuture.failedFuture(
-            new RateLimitExceededException(retryAfter, RegistrationSession.newBuilder().build())));
+        .thenThrow(new RateLimitExceededException(retryAfter, RegistrationSession.newBuilder().build()));
 
     final CheckVerificationCodeResponse response =
         blockingStub.checkVerificationCode(CheckVerificationCodeRequest.newBuilder()
@@ -353,10 +357,11 @@ class RegistrationServiceGrpcEndpointTest {
   }
 
   @Test
-  void checkVerificationCodeAttemptsExhausted() {
+  void checkVerificationCodeAttemptsExhausted()
+      throws NoVerificationCodeSentException, RateLimitExceededException, AttemptExpiredException, SessionNotFoundException {
+
     when(registrationService.checkVerificationCode(any(), any()))
-        .thenReturn(CompletableFuture.failedFuture(
-            new RateLimitExceededException(null, RegistrationSession.newBuilder().build())));
+        .thenThrow(new RateLimitExceededException(null, RegistrationSession.newBuilder().build()));
 
     final CheckVerificationCodeResponse response =
         blockingStub.checkVerificationCode(CheckVerificationCodeRequest.newBuilder()
@@ -373,9 +378,11 @@ class RegistrationServiceGrpcEndpointTest {
   }
 
   @Test
-  void checkVerificationCodeSessionNotFound() {
+  void checkVerificationCodeSessionNotFound()
+      throws NoVerificationCodeSentException, RateLimitExceededException, AttemptExpiredException, SessionNotFoundException {
+
     when(registrationService.checkVerificationCode(any(), any()))
-        .thenReturn(CompletableFuture.failedFuture(new SessionNotFoundException()));
+        .thenThrow(new SessionNotFoundException());
 
     final CheckVerificationCodeResponse response =
         blockingStub.checkVerificationCode(CheckVerificationCodeRequest.newBuilder()
@@ -392,9 +399,11 @@ class RegistrationServiceGrpcEndpointTest {
   }
 
   @Test
-  void checkVerificationCodeAttemptExpired() {
+  void checkVerificationCodeAttemptExpired()
+      throws NoVerificationCodeSentException, RateLimitExceededException, AttemptExpiredException, SessionNotFoundException {
+
     when(registrationService.checkVerificationCode(any(), any()))
-        .thenReturn(CompletableFuture.failedFuture(new AttemptExpiredException()));
+        .thenThrow(new AttemptExpiredException());
 
     final CheckVerificationCodeResponse response =
         blockingStub.checkVerificationCode(CheckVerificationCodeRequest.newBuilder()

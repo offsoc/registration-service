@@ -5,10 +5,18 @@
 
 package org.signal.registration.sender.fictitious;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
 import com.google.i18n.phonenumbers.NumberParseException;
 import com.google.i18n.phonenumbers.PhoneNumberUtil;
 import com.google.i18n.phonenumbers.Phonenumber;
 import com.google.protobuf.InvalidProtocolBufferException;
+import java.util.Collections;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -16,15 +24,6 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.signal.registration.sender.ClientType;
 import org.signal.registration.sender.MessageTransport;
 import org.signal.registration.sender.VerificationCodeGenerator;
-
-import java.util.Collections;
-import java.util.concurrent.CompletableFuture;
-
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 
 class FictitiousNumberVerificationCodeSenderTest {
 
@@ -63,10 +62,9 @@ class FictitiousNumberVerificationCodeSenderTest {
     final Phonenumber.PhoneNumber phoneNumber = PhoneNumberUtil.getInstance().getExampleNumber("US");
 
     when(verificationCodeGenerator.generateVerificationCode()).thenReturn(verificationCode);
-    when(repository.storeVerificationCode(any(), any(), any())).thenReturn(CompletableFuture.completedFuture(null));
 
     final byte[] sessionDataBytes =
-        sender.sendVerificationCode(MessageTransport.SMS, phoneNumber, Collections.emptyList(), ClientType.UNKNOWN).join().senderData();
+        sender.sendVerificationCode(MessageTransport.SMS, phoneNumber, Collections.emptyList(), ClientType.UNKNOWN).senderData();
 
     verify(repository).storeVerificationCode(phoneNumber, verificationCode, sender.getAttemptTtl());
 
@@ -85,7 +83,7 @@ class FictitiousNumberVerificationCodeSenderTest {
             .setVerificationCode(verificationCode)
             .build();
 
-    assertTrue(sender.checkVerificationCode(verificationCode, senderData.toByteArray()).join());
-    assertFalse(sender.checkVerificationCode(verificationCode + "-incorrect", senderData.toByteArray()).join());
+    assertTrue(sender.checkVerificationCode(verificationCode, senderData.toByteArray()));
+    assertFalse(sender.checkVerificationCode(verificationCode + "-incorrect", senderData.toByteArray()));
   }
 }

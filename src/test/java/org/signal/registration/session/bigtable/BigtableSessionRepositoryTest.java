@@ -6,16 +6,15 @@
 package org.signal.registration.session.bigtable;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.google.api.core.ApiFutures;
 import com.google.cloud.bigtable.admin.v2.BigtableTableAdminClient;
 import com.google.cloud.bigtable.admin.v2.BigtableTableAdminSettings;
 import com.google.cloud.bigtable.admin.v2.models.CreateTableRequest;
@@ -32,13 +31,8 @@ import io.micronaut.context.event.ApplicationEventPublisher;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -48,14 +42,12 @@ import org.signal.registration.session.SessionCompletedEvent;
 import org.signal.registration.session.SessionMetadata;
 import org.signal.registration.session.SessionNotFoundException;
 import org.signal.registration.session.SessionRepository;
-import org.signal.registration.util.CompletionExceptions;
 import org.signal.registration.util.UUIDUtil;
 
 class BigtableSessionRepositoryTest extends AbstractSessionRepositoryTest {
 
   private Emulator emulator;
   private BigtableDataClient bigtableDataClient;
-  private ExecutorService executorService;
   private ApplicationEventPublisher<SessionCompletedEvent> sessionCompletedEventPublisher;
 
   private BigtableSessionRepository sessionRepository;
@@ -87,27 +79,20 @@ class BigtableSessionRepositoryTest extends AbstractSessionRepositoryTest {
         .setInstanceId(INSTANCE_ID)
         .build());
 
-    executorService = Executors.newSingleThreadExecutor();
-
     //noinspection unchecked
     sessionCompletedEventPublisher = mock(ApplicationEventPublisher.class);
 
     sessionRepository = new BigtableSessionRepository(bigtableDataClient,
-        executorService,
-        sessionCompletedEventPublisher, new BigtableSessionRepositoryConfiguration(TABLE_ID, COLUMN_FAMILY_NAME),
+        sessionCompletedEventPublisher,
+        new BigtableSessionRepositoryConfiguration(TABLE_ID, COLUMN_FAMILY_NAME),
         getClock(),
         new SimpleMeterRegistry());
   }
 
   @AfterEach
-  void tearDown() throws InterruptedException {
+  void tearDown() {
     bigtableDataClient.close();
     emulator.stop();
-
-    executorService.shutdown();
-
-    //noinspection ResultOfMethodCallIgnored
-    executorService.awaitTermination(1, TimeUnit.SECONDS);
   }
 
   @Override
@@ -120,12 +105,10 @@ class BigtableSessionRepositoryTest extends AbstractSessionRepositoryTest {
     final RegistrationSession expiredSession = sessionRepository.createSession(
         PhoneNumberUtil.getInstance().getExampleNumber("US"),
         SessionMetadata.newBuilder().build(),
-        getClock().instant().minusSeconds(1)).join();
+        getClock().instant().minusSeconds(1));
 
-    final CompletionException completionException = assertThrows(CompletionException.class,
-        () -> sessionRepository.getSession(UUIDUtil.uuidFromByteString(expiredSession.getId())).join());
-
-    assertInstanceOf(SessionNotFoundException.class, CompletionExceptions.unwrap(completionException));
+    assertThrows(SessionNotFoundException.class,
+        () -> sessionRepository.getSession(UUIDUtil.uuidFromByteString(expiredSession.getId())));
   }
 
   @Test
@@ -133,7 +116,6 @@ class BigtableSessionRepositoryTest extends AbstractSessionRepositoryTest {
     final BigtableDataClient mockBigtableClient = mock(BigtableDataClient.class);
 
     final BigtableSessionRepository retryRepository = new BigtableSessionRepository(mockBigtableClient,
-        executorService,
         sessionCompletedEventPublisher, new BigtableSessionRepositoryConfiguration(TABLE_ID, COLUMN_FAMILY_NAME),
         getClock(),
         new SimpleMeterRegistry());
@@ -147,16 +129,16 @@ class BigtableSessionRepositoryTest extends AbstractSessionRepositoryTest {
 
     final Row row = buildRowForSession(session);
 
-    when(mockBigtableClient.readRowAsync(any(TableId.class), any(ByteString.class), any()))
-        .thenReturn(ApiFutures.immediateFuture(row));
+    when(mockBigtableClient.readRow(any(TableId.class), any(ByteString.class), any()))
+        .thenReturn(row);
 
-    when(mockBigtableClient.checkAndMutateRowAsync(any()))
-        .thenReturn(ApiFutures.immediateFuture(false))
-        .thenReturn(ApiFutures.immediateFuture(true));
+    when(mockBigtableClient.checkAndMutateRow(any()))
+        .thenReturn(false)
+        .thenReturn(true);
 
-    assertDoesNotThrow(() -> retryRepository.updateSession(sessionId, CompletableFuture::completedFuture, 2).join());
+    assertDoesNotThrow(() -> retryRepository.updateSession(sessionId, Function.identity()));
 
-    verify(mockBigtableClient, times(2)).checkAndMutateRowAsync(any());
+    verify(mockBigtableClient, times(2)).checkAndMutateRow(any());
   }
 
   @Test
@@ -164,7 +146,6 @@ class BigtableSessionRepositoryTest extends AbstractSessionRepositoryTest {
     final BigtableDataClient mockBigtableClient = mock(BigtableDataClient.class);
 
     final BigtableSessionRepository retryRepository = new BigtableSessionRepository(mockBigtableClient,
-        executorService,
         sessionCompletedEventPublisher,
         new BigtableSessionRepositoryConfiguration(TABLE_ID, COLUMN_FAMILY_NAME),
         getClock(), new SimpleMeterRegistry());
@@ -178,17 +159,13 @@ class BigtableSessionRepositoryTest extends AbstractSessionRepositoryTest {
 
     final Row row = buildRowForSession(session);
 
-    when(mockBigtableClient.readRowAsync(any(TableId.class), any(ByteString.class), any()))
-        .thenReturn(ApiFutures.immediateFuture(row));
-
-    when(mockBigtableClient.checkAndMutateRowAsync(any()))
-        .thenReturn(ApiFutures.immediateFuture(false));
+    when(mockBigtableClient.readRow(any(TableId.class), any(ByteString.class), any())).thenReturn(row);
+    when(mockBigtableClient.checkAndMutateRow(any())).thenReturn(false);
 
     assertThrows(RuntimeException.class,
-        () -> retryRepository.updateSession(sessionId, CompletableFuture::completedFuture, 3).join());
+        () -> retryRepository.updateSession(sessionId, Function.identity()));
 
-    // We expect one call for the initial attempt, then one for each retry
-    verify(mockBigtableClient, times(BigtableSessionRepository.MAX_UPDATE_RETRIES + 1)).checkAndMutateRowAsync(any());
+    verify(mockBigtableClient, times(BigtableSessionRepository.MAX_UPDATE_ATTEMPTS)).checkAndMutateRow(any());
   }
 
   private Row buildRowForSession(final RegistrationSession session) {
@@ -216,20 +193,18 @@ class BigtableSessionRepositoryTest extends AbstractSessionRepositoryTest {
     final RegistrationSession expiredSession = sessionRepository.createSession(
         PhoneNumberUtil.getInstance().getExampleNumber("US"),
         SessionMetadata.newBuilder().build(),
-        currentTime.minus(BigtableSessionRepository.REMOVAL_TTL_PADDING.multipliedBy(2))).join();
+        currentTime.minus(BigtableSessionRepository.REMOVAL_TTL_PADDING.multipliedBy(2)));
 
     // Add a non-expired session which should not appear in the list of expired sessions
     sessionRepository.createSession(
         PhoneNumberUtil.getInstance().getExampleNumber("GB"),
         SessionMetadata.newBuilder().build(),
-        currentTime.plus(BigtableSessionRepository.REMOVAL_TTL_PADDING.multipliedBy(2))).join();
+        currentTime.plus(BigtableSessionRepository.REMOVAL_TTL_PADDING.multipliedBy(2)));
 
-    sessionRepository.deleteExpiredSessions().join();
+    sessionRepository.deleteExpiredSessions();
 
-    final CompletionException completionException = assertThrows(CompletionException.class,
-        () -> sessionRepository.getSession(UUIDUtil.uuidFromByteString(expiredSession.getId())).join());
-
-    assertInstanceOf(SessionNotFoundException.class, CompletionExceptions.unwrap(completionException));
+    assertThrows(SessionNotFoundException.class,
+        () -> sessionRepository.getSession(UUIDUtil.uuidFromByteString(expiredSession.getId())));
 
     verify(sessionCompletedEventPublisher).publishEvent(new SessionCompletedEvent(expiredSession));
   }
@@ -239,13 +214,13 @@ class BigtableSessionRepositoryTest extends AbstractSessionRepositoryTest {
     final RegistrationSession expiredSession = sessionRepository.createSession(
         PhoneNumberUtil.getInstance().getExampleNumber("US"),
         SessionMetadata.newBuilder().build(),
-        Instant.now().minus(BigtableSessionRepository.REMOVAL_TTL_PADDING.multipliedBy(2))).join();
+        Instant.now().minus(BigtableSessionRepository.REMOVAL_TTL_PADDING.multipliedBy(2)));
 
     final RegistrationSession notInRepositorySession = RegistrationSession.newBuilder()
         .setId(UUIDUtil.uuidToByteString(UUID.randomUUID()))
         .build();
 
-    assertEquals(Optional.of(expiredSession), sessionRepository.removeExpiredSession(expiredSession).blockOptional());
-    assertEquals(Optional.empty(), sessionRepository.removeExpiredSession(notInRepositorySession).blockOptional());
+    assertTrue(sessionRepository.removeExpiredSession(expiredSession));
+    assertFalse(sessionRepository.removeExpiredSession(notInRepositorySession));
   }
 }

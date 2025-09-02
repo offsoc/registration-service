@@ -10,16 +10,19 @@ import com.google.i18n.phonenumbers.Phonenumber;
 import com.google.protobuf.InvalidProtocolBufferException;
 import io.micronaut.context.annotation.Requires;
 import jakarta.inject.Singleton;
-import org.signal.registration.sender.*;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
+import java.io.UncheckedIOException;
 import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
 import java.util.regex.Pattern;
+import org.signal.registration.sender.AttemptData;
+import org.signal.registration.sender.ClientType;
+import org.signal.registration.sender.MessageTransport;
+import org.signal.registration.sender.VerificationCodeGenerator;
+import org.signal.registration.sender.VerificationCodeSender;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * A fictitious number verification code sender generates random verification codes for phone numbers known to be
@@ -83,31 +86,31 @@ public class FictitiousNumberVerificationCodeSender implements VerificationCodeS
   }
 
   @Override
-  public CompletableFuture<AttemptData> sendVerificationCode(final MessageTransport messageTransport,
+  public AttemptData sendVerificationCode(final MessageTransport messageTransport,
       final Phonenumber.PhoneNumber phoneNumber,
       final List<Locale.LanguageRange> languageRanges,
-      final ClientType clientType) throws UnsupportedMessageTransportException {
+      final ClientType clientType) {
 
     final String verificationCode = verificationCodeGenerator.generateVerificationCode();
+    repository.storeVerificationCode(phoneNumber, verificationCode, getAttemptTtl());
 
-    return repository.storeVerificationCode(phoneNumber, verificationCode, getAttemptTtl())
-        .thenApply(ignored -> new AttemptData(Optional.empty(),
-            FictitiousNumberVerificationCodeSessionData.newBuilder()
-                .setVerificationCode(verificationCode)
-                .build()
-                .toByteArray()));
+    return new AttemptData(Optional.empty(),
+        FictitiousNumberVerificationCodeSessionData.newBuilder()
+            .setVerificationCode(verificationCode)
+            .build()
+            .toByteArray());
   }
 
   @Override
-  public CompletableFuture<Boolean> checkVerificationCode(final String verificationCode, final byte[] senderData) {
+  public boolean checkVerificationCode(final String verificationCode, final byte[] senderData) {
     try {
       final String expectedVerificationCode =
           FictitiousNumberVerificationCodeSessionData.parseFrom(senderData).getVerificationCode();
 
-      return CompletableFuture.completedFuture(expectedVerificationCode.equals(verificationCode));
+      return expectedVerificationCode.equals(verificationCode);
     } catch (final InvalidProtocolBufferException e) {
       logger.error("Failed to parse stored session data", e);
-      return CompletableFuture.failedFuture(e);
+      throw new UncheckedIOException(e);
     }
   }
 }

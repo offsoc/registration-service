@@ -8,17 +8,16 @@ package org.signal.registration.ratelimit;
 import io.micronaut.context.annotation.Value;
 import jakarta.inject.Named;
 import jakarta.inject.Singleton;
-import org.signal.registration.rpc.MessageTransport;
-import org.signal.registration.session.FailedSendReason;
-import org.signal.registration.session.RegistrationSession;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
 import java.util.stream.Stream;
+import org.signal.registration.rpc.MessageTransport;
+import org.signal.registration.session.FailedSendReason;
+import org.signal.registration.session.RegistrationSession;
 
 @Singleton
 @Named("send-voice-verification-code-per-session")
@@ -37,7 +36,7 @@ public class SendVoiceVerificationCodeRateLimiter extends FixedDelayRegistration
   }
 
   @Override
-  public CompletableFuture<Optional<Instant>> getTimeOfNextAction(final RegistrationSession session) {
+  public Optional<Instant> getTimeOfNextAction(final RegistrationSession session) {
     final Optional<Instant> maybeFirstAllowableVoiceCall;
 
     if (session.getRejectedTransportsList().contains(MessageTransport.MESSAGE_TRANSPORT_SMS)) {
@@ -52,7 +51,7 @@ public class SendVoiceVerificationCodeRateLimiter extends FixedDelayRegistration
               .map(firstSmsAttempt -> Instant.ofEpochMilli(firstSmsAttempt.getTimestampEpochMillis()).plus(delayAfterFirstSms));
     }
 
-    return CompletableFuture.completedFuture(maybeFirstAllowableVoiceCall.flatMap(firstAllowableVoiceCall -> {
+    return maybeFirstAllowableVoiceCall.flatMap(firstAllowableVoiceCall -> {
       final Instant currentTime = getClock().instant();
 
       if (firstAllowableVoiceCall.isAfter(currentTime)) {
@@ -61,8 +60,8 @@ public class SendVoiceVerificationCodeRateLimiter extends FixedDelayRegistration
       }
 
       // We've cleared the post-first-SMS delay and should do the normal thing
-      return super.getTimeOfNextAction(session).join();
-    }));
+      return super.getTimeOfNextAction(session);
+    });
   }
 
   @Override

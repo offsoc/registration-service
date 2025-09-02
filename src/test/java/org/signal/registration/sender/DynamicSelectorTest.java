@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.signal.registration.sender.SenderSelectionStrategy.SelectionReason;
 
 import com.google.i18n.phonenumbers.PhoneNumberUtil;
 import com.google.i18n.phonenumbers.Phonenumber;
@@ -15,7 +16,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.TreeMap;
-import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import javax.annotation.Nullable;
@@ -27,8 +27,6 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.signal.registration.bandit.AdaptiveStrategy;
-
-import static org.signal.registration.sender.SenderSelectionStrategy.*;
 
 public class DynamicSelectorTest {
 
@@ -271,20 +269,18 @@ public class DynamicSelectorTest {
       }
 
       @Override
-      public CompletableFuture<AttemptData> sendVerificationCode(
+      public AttemptData sendVerificationCode(
           final MessageTransport messageTransport,
           final Phonenumber.PhoneNumber phoneNumber,
           final List<Locale.LanguageRange> languageRanges,
-          final ClientType clientType
-      ) throws UnsupportedMessageTransportException {
+          final ClientType clientType) {
+
         return null;
       }
 
       @Override
-      public CompletableFuture<Boolean> checkVerificationCode(
-          final String verificationCode, final byte[] senderData
-      ) {
-        return null;
+      public boolean checkVerificationCode(final String verificationCode, final byte[] senderData) {
+        return false;
       }
     };
   }

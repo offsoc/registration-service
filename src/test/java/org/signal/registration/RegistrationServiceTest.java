@@ -7,11 +7,13 @@ package org.signal.registration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
@@ -23,6 +25,8 @@ import com.google.i18n.phonenumbers.PhoneNumberUtil;
 import com.google.i18n.phonenumbers.Phonenumber;
 import com.google.protobuf.ByteString;
 import io.micronaut.context.event.ApplicationEventPublisher;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
@@ -33,8 +37,6 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
 import java.util.stream.Stream;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.tuple.Pair;
@@ -52,6 +54,7 @@ import org.signal.registration.sender.AttemptData;
 import org.signal.registration.sender.ClientType;
 import org.signal.registration.sender.MessageTransport;
 import org.signal.registration.sender.SenderFraudBlockException;
+import org.signal.registration.sender.SenderRateLimitedRequestException;
 import org.signal.registration.sender.SenderRejectedRequestException;
 import org.signal.registration.sender.SenderRejectedTransportException;
 import org.signal.registration.sender.SenderSelectionStrategy;
@@ -64,7 +67,6 @@ import org.signal.registration.session.RegistrationSession;
 import org.signal.registration.session.SessionMetadata;
 import org.signal.registration.session.SessionNotFoundException;
 import org.signal.registration.session.SessionRepository;
-import org.signal.registration.util.CompletionExceptions;
 import org.signal.registration.util.UUIDUtil;
 
 class RegistrationServiceTest {
@@ -112,37 +114,27 @@ class RegistrationServiceTest {
 
     //noinspection unchecked
     sessionCreationRateLimiter = mock(RateLimiter.class);
-    when(sessionCreationRateLimiter.checkRateLimit(any())).thenReturn(CompletableFuture.completedFuture(null));
 
     //noinspection unchecked
     sendSmsVerificationCodePerSessionRateLimiter = mock(RateLimiter.class);
-    when(sendSmsVerificationCodePerSessionRateLimiter.checkRateLimit(any())).thenReturn(CompletableFuture.completedFuture(null));
-    when(sendSmsVerificationCodePerSessionRateLimiter.getTimeOfNextAction(any()))
-        .thenReturn(CompletableFuture.completedFuture(Optional.of(CURRENT_TIME)));
+    when(sendSmsVerificationCodePerSessionRateLimiter.getTimeOfNextAction(any())).thenReturn(Optional.of(CURRENT_TIME));
 
     //noinspection unchecked
     sendVoiceVerificationCodePerSessionRateLimiter = mock(RateLimiter.class);
-    when(sendVoiceVerificationCodePerSessionRateLimiter.checkRateLimit(any())).thenReturn(CompletableFuture.completedFuture(null));
-    when(sendVoiceVerificationCodePerSessionRateLimiter.getTimeOfNextAction(any()))
-        .thenReturn(CompletableFuture.completedFuture(Optional.of(CURRENT_TIME)));
+    when(sendVoiceVerificationCodePerSessionRateLimiter.getTimeOfNextAction(any())).thenReturn(Optional.of(CURRENT_TIME));
 
     //noinspection unchecked
     checkVerificationCodePerSessionRateLimiter = mock(RateLimiter.class);
-    when(checkVerificationCodePerSessionRateLimiter.checkRateLimit(any())).thenReturn(CompletableFuture.completedFuture(null));
-    when(checkVerificationCodePerSessionRateLimiter.getTimeOfNextAction(any()))
-        .thenReturn(CompletableFuture.completedFuture(Optional.of(CURRENT_TIME)));
+    when(checkVerificationCodePerSessionRateLimiter.getTimeOfNextAction(any())).thenReturn(Optional.of(CURRENT_TIME));
 
     //noinspection unchecked
     sendSmsVerificationCodePerNumberRateLimiter = mock(RateLimiter.class);
-    when(sendSmsVerificationCodePerNumberRateLimiter.checkRateLimit(any())).thenReturn(CompletableFuture.completedFuture(null));
 
     //noinspection unchecked
     sendVoiceVerificationCodePerNumberRateLimiter = mock(RateLimiter.class);
-    when(sendVoiceVerificationCodePerNumberRateLimiter.checkRateLimit(any())).thenReturn(CompletableFuture.completedFuture(null));
 
     //noinspection unchecked
     checkVerificationCodePerNumberRateLimiter = mock(RateLimiter.class);
-    when(checkVerificationCodePerNumberRateLimiter.checkRateLimit(any())).thenReturn(CompletableFuture.completedFuture(null));
 
     registrationService = new RegistrationService(senderSelectionStrategy,
         sessionRepository,
@@ -158,8 +150,9 @@ class RegistrationServiceTest {
   }
 
   @Test
-  void createSession() {
-    final RegistrationSession session = registrationService.createRegistrationSession(PHONE_NUMBER, "", SESSION_METADATA).join();
+  void createSession() throws RateLimitExceededException {
+    final RegistrationSession session =
+        registrationService.createRegistrationSession(PHONE_NUMBER, "", SESSION_METADATA);
 
     assertEquals(PhoneNumberUtil.getInstance().format(PHONE_NUMBER, PhoneNumberUtil.PhoneNumberFormat.E164),
         session.getPhoneNumber());
@@ -169,34 +162,37 @@ class RegistrationServiceTest {
   }
 
   @Test
-  void createSessionRateLimited() {
+  void createSessionRateLimited() throws RateLimitExceededException {
     final RateLimitExceededException rateLimitExceededException = new RateLimitExceededException(Duration.ZERO);
 
-    when(sessionCreationRateLimiter.checkRateLimit(any()))
-        .thenReturn(CompletableFuture.failedFuture(rateLimitExceededException));
+    doThrow(rateLimitExceededException)
+        .when(sessionCreationRateLimiter).checkRateLimit(any());
 
-    final CompletionException completionException = assertThrows(CompletionException.class,
-        () -> registrationService.createRegistrationSession(PHONE_NUMBER, "", SESSION_METADATA).join());
+    final RateLimitExceededException thrownException = assertThrows(RateLimitExceededException.class,
+        () -> registrationService.createRegistrationSession(PHONE_NUMBER, "", SESSION_METADATA));
 
-    assertEquals(rateLimitExceededException, CompletionExceptions.unwrap(completionException));
+    assertEquals(rateLimitExceededException, thrownException);
     verify(sessionRepository, never()).createSession(any(), any(), any());
   }
 
   @Test
-  void sendVerificationCode() {
+  void sendVerificationCode()
+      throws SenderRejectedRequestException, RateLimitExceededException, SessionNotFoundException, SessionAlreadyVerifiedException, TransportNotAllowedException {
     final String remoteId = UUID.randomUUID().toString();
 
     final UUID sessionId;
     {
-      final RegistrationSession session = registrationService.createRegistrationSession(PHONE_NUMBER, "", SESSION_METADATA).join();
+      final RegistrationSession session =
+          registrationService.createRegistrationSession(PHONE_NUMBER, "", SESSION_METADATA);
+
       sessionId = UUIDUtil.uuidFromByteString(session.getId());
     }
 
     when(sender.sendVerificationCode(MessageTransport.SMS, PHONE_NUMBER, LANGUAGE_RANGES, CLIENT_TYPE))
-        .thenReturn(CompletableFuture.completedFuture(new AttemptData(Optional.of(remoteId), VERIFICATION_CODE_BYTES)));
+        .thenReturn(new AttemptData(Optional.of(remoteId), VERIFICATION_CODE_BYTES));
 
     final RegistrationSession session =
-        registrationService.sendVerificationCode(MessageTransport.SMS, sessionId, SENDER_NAME, LANGUAGE_RANGES, CLIENT_TYPE).join();
+        registrationService.sendVerificationCode(MessageTransport.SMS, sessionId, SENDER_NAME, LANGUAGE_RANGES, CLIENT_TYPE);
 
     verify(sender).sendVerificationCode(MessageTransport.SMS, PHONE_NUMBER, LANGUAGE_RANGES, CLIENT_TYPE);
     verify(sendSmsVerificationCodePerSessionRateLimiter).checkRateLimit(any());
@@ -206,45 +202,51 @@ class RegistrationServiceTest {
     assertEquals(1, session.getRegistrationAttemptsCount());
     assertEquals(remoteId, session.getRegistrationAttempts(0).getRemoteId());
     assertEquals(org.signal.registration.rpc.MessageTransport.MESSAGE_TRANSPORT_SMS,
-        session.getRegistrationAttemptsList().get(0).getMessageTransport());
+        session.getRegistrationAttemptsList().getFirst().getMessageTransport());
   }
 
   @Test
-  void previouslyFailedSenders() {
-    RegistrationSession session = registrationService.createRegistrationSession(PHONE_NUMBER, "", SESSION_METADATA).join();
-    final UUID sessionId = UUIDUtil.uuidFromByteString(session.getId());
+  void previouslyFailedSenders()
+      throws SenderRejectedRequestException, RateLimitExceededException, SessionNotFoundException, SessionAlreadyVerifiedException, TransportNotAllowedException {
+
+    final UUID sessionId;
+    {
+      final RegistrationSession session =
+          registrationService.createRegistrationSession(PHONE_NUMBER, "", SESSION_METADATA);
+
+      sessionId = UUIDUtil.uuidFromByteString(session.getId());
+    }
 
     // attempt failed due to sender being unavailable
     when(sender.getName()).thenReturn("sender1");
-    when(sender.sendVerificationCode(MessageTransport.SMS, PHONE_NUMBER, LANGUAGE_RANGES, CLIENT_TYPE))
-        .thenReturn(CompletableFuture.failedFuture(new Exception("sender unavailable")));
+    doThrow(new UncheckedIOException(new IOException("sender unavailable")))
+        .when(sender).sendVerificationCode(MessageTransport.SMS, PHONE_NUMBER, LANGUAGE_RANGES, CLIENT_TYPE);
 
-    assertThrows(CompletionException.class, () -> {
-      registrationService.sendVerificationCode(MessageTransport.SMS, sessionId, "sender1", LANGUAGE_RANGES, CLIENT_TYPE).join();
-    });
+    assertThrows(UncheckedIOException.class,
+        () -> registrationService.sendVerificationCode(MessageTransport.SMS, sessionId, "sender1", LANGUAGE_RANGES, CLIENT_TYPE));
 
     // attempt failed due to fraud block
     when(sender.getName()).thenReturn("sender2");
-    when(sender.sendVerificationCode(MessageTransport.SMS, PHONE_NUMBER, LANGUAGE_RANGES, CLIENT_TYPE))
-        .thenReturn(CompletableFuture.failedFuture(new SenderFraudBlockException("fraud block")));
+    doThrow(new SenderFraudBlockException("fraud block"))
+        .when(sender).sendVerificationCode(MessageTransport.SMS, PHONE_NUMBER, LANGUAGE_RANGES, CLIENT_TYPE);
 
-    assertThrows(CompletionException.class, () -> {
-      registrationService.sendVerificationCode(MessageTransport.SMS, sessionId, "sender2", LANGUAGE_RANGES, CLIENT_TYPE).join();
-    });
+    assertThrows(SenderFraudBlockException.class,
+        () -> registrationService.sendVerificationCode(MessageTransport.SMS, sessionId, "sender2", LANGUAGE_RANGES, CLIENT_TYPE));
 
     // successful send that is not verified will be in the failed sender list after a subsequent send
     when(sender.getName()).thenReturn("sender3");
-    when(sender.sendVerificationCode(MessageTransport.SMS, PHONE_NUMBER, LANGUAGE_RANGES, CLIENT_TYPE))
-        .thenReturn(CompletableFuture.completedFuture(new AttemptData(Optional.of("third"), "code".getBytes(StandardCharsets.UTF_8))));
+    doReturn(new AttemptData(Optional.of("third"), "code".getBytes(StandardCharsets.UTF_8)))
+        .when(sender).sendVerificationCode(MessageTransport.SMS, PHONE_NUMBER, LANGUAGE_RANGES, CLIENT_TYPE);
 
-    registrationService.sendVerificationCode(MessageTransport.SMS, sessionId, "sender3", LANGUAGE_RANGES, CLIENT_TYPE).join();
+    registrationService.sendVerificationCode(MessageTransport.SMS, sessionId, "sender3", LANGUAGE_RANGES, CLIENT_TYPE);
 
     // last attempt
-    when(sender.sendVerificationCode(MessageTransport.SMS, PHONE_NUMBER, LANGUAGE_RANGES, CLIENT_TYPE))
-        .thenReturn(CompletableFuture.completedFuture(new AttemptData(Optional.of("fourth"), "code".getBytes(StandardCharsets.UTF_8))));
-    registrationService.sendVerificationCode(MessageTransport.SMS, sessionId, "sender4", LANGUAGE_RANGES, CLIENT_TYPE).join();
+    doReturn(new AttemptData(Optional.of("fourth"), "code".getBytes(StandardCharsets.UTF_8)))
+        .when(sender).sendVerificationCode(MessageTransport.SMS, PHONE_NUMBER, LANGUAGE_RANGES, CLIENT_TYPE);
 
-    session = sessionRepository.getSession(sessionId).join();
+    registrationService.sendVerificationCode(MessageTransport.SMS, sessionId, "sender4", LANGUAGE_RANGES, CLIENT_TYPE);
+
+    final RegistrationSession session = sessionRepository.getSession(sessionId);
 
     assertEquals(2, session.getRegistrationAttemptsCount());
     assertEquals(2, session.getFailedAttemptsCount());
@@ -267,27 +269,28 @@ class RegistrationServiceTest {
 
   @ParameterizedTest
   @ValueSource(booleans = {true, false})
-  void sendVerificationCodeSmsRateLimited(final boolean sessionRateLimited) {
+  void sendVerificationCodeSmsRateLimited(final boolean sessionRateLimited)
+      throws SenderRejectedRequestException, RateLimitExceededException, SessionNotFoundException {
+
     final UUID sessionId;
     {
-      final RegistrationSession session = registrationService.createRegistrationSession(PHONE_NUMBER, "", SESSION_METADATA).join();
+      final RegistrationSession session = registrationService.createRegistrationSession(PHONE_NUMBER, "", SESSION_METADATA);
       sessionId = UUIDUtil.uuidFromByteString(session.getId());
     }
 
     if (sessionRateLimited) {
-      when(sendSmsVerificationCodePerSessionRateLimiter.checkRateLimit(any()))
-          .thenAnswer(answer -> CompletableFuture.failedFuture(
-              new RateLimitExceededException(null, answer.getArgument(0, RegistrationSession.class))));
+      doAnswer(invocation -> {
+        throw new RateLimitExceededException(null, invocation.getArgument(0));
+      }).when(sendSmsVerificationCodePerSessionRateLimiter).checkRateLimit(any());
     } else {
-      when(sendSmsVerificationCodePerNumberRateLimiter.checkRateLimit(any()))
-          .thenReturn(CompletableFuture.failedFuture(new RateLimitExceededException(null, null)));
+      doThrow(new RateLimitExceededException(null, null))
+          .when(sendSmsVerificationCodePerNumberRateLimiter).checkRateLimit(any());
     }
 
-    final CompletionException completionException = assertThrows(CompletionException.class,
-        () -> registrationService.sendVerificationCode(MessageTransport.SMS, sessionId, SENDER_NAME, LANGUAGE_RANGES, CLIENT_TYPE).join());
+    final RateLimitExceededException rateLimitExceededException = assertThrows(RateLimitExceededException.class,
+        () -> registrationService.sendVerificationCode(MessageTransport.SMS, sessionId, SENDER_NAME, LANGUAGE_RANGES, CLIENT_TYPE));
 
-    final RateLimitExceededException e = assertInstanceOf(RateLimitExceededException.class, CompletionExceptions.unwrap(completionException));
-    assertTrue(e.getRegistrationSession().isPresent());
+    assertTrue(rateLimitExceededException.getRegistrationSession().isPresent());
 
     verify(sender, never()).sendVerificationCode(any(), any(), any(), any());
     verify(sendSmsVerificationCodePerSessionRateLimiter).checkRateLimit(any());
@@ -297,27 +300,27 @@ class RegistrationServiceTest {
 
   @ParameterizedTest
   @ValueSource(booleans = {true, false})
-  void sendVerificationCodeVoiceRateLimited(final boolean sessionRateLimited) {
+  void sendVerificationCodeVoiceRateLimited(final boolean sessionRateLimited)
+      throws SenderRejectedRequestException, RateLimitExceededException, SessionNotFoundException {
     final UUID sessionId;
     {
-      final RegistrationSession session = registrationService.createRegistrationSession(PHONE_NUMBER, "", SESSION_METADATA).join();
+      final RegistrationSession session = registrationService.createRegistrationSession(PHONE_NUMBER, "", SESSION_METADATA);
       sessionId = UUIDUtil.uuidFromByteString(session.getId());
     }
 
     if (sessionRateLimited) {
-      when(sendVoiceVerificationCodePerSessionRateLimiter.checkRateLimit(any()))
-          .thenAnswer(answer -> CompletableFuture.failedFuture(
-              new RateLimitExceededException(null, answer.getArgument(0, RegistrationSession.class))));
+      doAnswer(invocation -> {
+        throw new RateLimitExceededException(null, invocation.getArgument(0));
+      }).when(sendVoiceVerificationCodePerSessionRateLimiter).checkRateLimit(any());
     } else {
-      when(sendVoiceVerificationCodePerNumberRateLimiter.checkRateLimit(any()))
-          .thenReturn(CompletableFuture.failedFuture(new RateLimitExceededException(null, null)));
+      doThrow(new RateLimitExceededException(null, null))
+          .when(sendVoiceVerificationCodePerNumberRateLimiter).checkRateLimit(any());
     }
 
-    final CompletionException completionException = assertThrows(CompletionException.class,
-        () -> registrationService.sendVerificationCode(MessageTransport.VOICE, sessionId, SENDER_NAME, LANGUAGE_RANGES, CLIENT_TYPE).join());
+    final RateLimitExceededException rateLimitExceededException = assertThrows(RateLimitExceededException.class,
+        () -> registrationService.sendVerificationCode(MessageTransport.VOICE, sessionId, SENDER_NAME, LANGUAGE_RANGES, CLIENT_TYPE));
 
-    final RateLimitExceededException e = assertInstanceOf(RateLimitExceededException.class, CompletionExceptions.unwrap(completionException));
-    assertTrue(e.getRegistrationSession().isPresent(), "Callers expect the session to be present");
+    assertTrue(rateLimitExceededException.getRegistrationSession().isPresent(), "Callers expect the session to be present");
 
     verify(sender, never()).sendVerificationCode(any(), any(), any(), any());
     verify(sendSmsVerificationCodePerSessionRateLimiter, never()).checkRateLimit(any());
@@ -326,24 +329,40 @@ class RegistrationServiceTest {
   }
 
   @Test
-  void sendVerificationCodeTransportNotAllowed() {
+  void sendVerificationCodeSenderRateLimited()
+      throws RateLimitExceededException, SenderRejectedRequestException, SessionNotFoundException {
+
+    final RegistrationSession session = registrationService.createRegistrationSession(PHONE_NUMBER, "", SESSION_METADATA);
+    final UUID sessionId = UUIDUtil.uuidFromByteString(session.getId());
+
+    final Duration retryAfter = Duration.ofSeconds(17);
+
+    when(sender.sendVerificationCode(any(), any(), any(), any()))
+        .thenThrow(new SenderRateLimitedRequestException(retryAfter));
+
+    final RateLimitExceededException rateLimitExceededException = assertThrows(RateLimitExceededException.class,
+        () -> registrationService.sendVerificationCode(MessageTransport.SMS, sessionId, SENDER_NAME, LANGUAGE_RANGES, CLIENT_TYPE));
+
+    assertEquals(Optional.of(retryAfter), rateLimitExceededException.getRetryAfterDuration());
+    assertEquals(Optional.of(session), rateLimitExceededException.getRegistrationSession());
+
+    verify(sessionRepository, never()).updateSession(any(), any());
+  }
+
+  @Test
+  void sendVerificationCodeTransportNotAllowed()
+      throws SenderRejectedRequestException, RateLimitExceededException, SessionNotFoundException {
     final UUID sessionId;
     {
-      final RegistrationSession session = registrationService.createRegistrationSession(PHONE_NUMBER, "", SESSION_METADATA).join();
+      final RegistrationSession session = registrationService.createRegistrationSession(PHONE_NUMBER, "", SESSION_METADATA);
       sessionId = UUIDUtil.uuidFromByteString(session.getId());
     }
 
     when(sender.sendVerificationCode(MessageTransport.SMS, PHONE_NUMBER, LANGUAGE_RANGES, CLIENT_TYPE))
-        .thenReturn(CompletableFuture.failedFuture(new SenderRejectedTransportException(new RuntimeException())));
+        .thenThrow(new SenderRejectedTransportException(new RuntimeException()));
 
-    final CompletionException completionException = assertThrows(CompletionException.class, () -> {
-      registrationService.sendVerificationCode(MessageTransport.SMS, sessionId, SENDER_NAME, LANGUAGE_RANGES, CLIENT_TYPE).join();
-    });
-
-    assertInstanceOf(TransportNotAllowedException.class, completionException.getCause());
-
-    final TransportNotAllowedException transportNotAllowedException =
-        (TransportNotAllowedException) completionException.getCause();
+    final TransportNotAllowedException transportNotAllowedException = assertThrows(TransportNotAllowedException.class,
+        () -> registrationService.sendVerificationCode(MessageTransport.SMS, sessionId, SENDER_NAME, LANGUAGE_RANGES, CLIENT_TYPE));
 
     verify(sender).sendVerificationCode(MessageTransport.SMS, PHONE_NUMBER, LANGUAGE_RANGES, CLIENT_TYPE);
     verify(sendSmsVerificationCodePerSessionRateLimiter).checkRateLimit(any());
@@ -367,26 +386,27 @@ class RegistrationServiceTest {
 
   @ParameterizedTest
   @MethodSource
-  void sendVerificationCodeRejectionError(Throwable senderException, FailedSendReason expectedFailureReason) {
+  void sendVerificationCodeRejectionError(Throwable senderException, FailedSendReason expectedFailureReason)
+      throws SenderRejectedRequestException, RateLimitExceededException, SessionNotFoundException {
+
     final UUID sessionId;
     {
-      final RegistrationSession session = registrationService.createRegistrationSession(PHONE_NUMBER, "", SESSION_METADATA).join();
+      final RegistrationSession session = registrationService.createRegistrationSession(PHONE_NUMBER, "", SESSION_METADATA);
       sessionId = UUIDUtil.uuidFromByteString(session.getId());
     }
 
     when(sender.sendVerificationCode(MessageTransport.SMS, PHONE_NUMBER, LANGUAGE_RANGES, CLIENT_TYPE))
-        .thenReturn(CompletableFuture.failedFuture(senderException));
+        .thenThrow(senderException);
 
-    assertThrows(CompletionException.class, () -> {
-      registrationService.sendVerificationCode(MessageTransport.SMS, sessionId, SENDER_NAME, LANGUAGE_RANGES, CLIENT_TYPE).join();
-    });
+    assertThrows(senderException.getClass(),
+        () -> registrationService.sendVerificationCode(MessageTransport.SMS, sessionId, SENDER_NAME, LANGUAGE_RANGES, CLIENT_TYPE));
 
     verify(sender).sendVerificationCode(MessageTransport.SMS, PHONE_NUMBER, LANGUAGE_RANGES, CLIENT_TYPE);
     verify(sendSmsVerificationCodePerSessionRateLimiter).checkRateLimit(any());
     verify(sendVoiceVerificationCodePerSessionRateLimiter, never()).checkRateLimit(any());
     verify(sessionRepository).updateSession(eq(sessionId), any());
 
-    final RegistrationSession session = sessionRepository.getSession(sessionId).join();
+    final RegistrationSession session = sessionRepository.getSession(sessionId);
 
     assertEquals(0, session.getRegistrationAttemptsCount());
     assertEquals(1, session.getFailedAttemptsCount());
@@ -394,23 +414,24 @@ class RegistrationServiceTest {
   }
 
   @Test
-  void registrationAttempts() {
+  void registrationAttempts()
+      throws SenderRejectedRequestException, RateLimitExceededException, SessionAlreadyVerifiedException, TransportNotAllowedException, SessionNotFoundException {
     final String firstVerificationCode = "123456";
     final String secondVerificationCode = "234567";
 
     when(sender.sendVerificationCode(any(), eq(PHONE_NUMBER), eq(LANGUAGE_RANGES), eq(CLIENT_TYPE)))
-        .thenReturn(CompletableFuture.completedFuture(new AttemptData(Optional.of("first"), firstVerificationCode.getBytes(StandardCharsets.UTF_8))))
-        .thenReturn(CompletableFuture.completedFuture(new AttemptData(Optional.of("second"), secondVerificationCode.getBytes(StandardCharsets.UTF_8))));
+        .thenReturn(new AttemptData(Optional.of("first"), firstVerificationCode.getBytes(StandardCharsets.UTF_8)))
+        .thenReturn(new AttemptData(Optional.of("second"), secondVerificationCode.getBytes(StandardCharsets.UTF_8)));
 
     final UUID sessionId;
     {
-      final RegistrationSession session = registrationService.createRegistrationSession(PHONE_NUMBER, "", SESSION_METADATA).join();
+      final RegistrationSession session = registrationService.createRegistrationSession(PHONE_NUMBER, "", SESSION_METADATA);
       sessionId = UUIDUtil.uuidFromByteString(session.getId());
     }
 
     {
       final RegistrationSession session =
-          registrationService.sendVerificationCode(MessageTransport.SMS, sessionId, null, LANGUAGE_RANGES, CLIENT_TYPE).join();
+          registrationService.sendVerificationCode(MessageTransport.SMS, sessionId, null, LANGUAGE_RANGES, CLIENT_TYPE);
 
       final ByteString expectedSenderData = ByteString.copyFromUtf8(firstVerificationCode);
 
@@ -429,7 +450,7 @@ class RegistrationServiceTest {
 
     {
       final RegistrationSession session =
-          registrationService.sendVerificationCode(MessageTransport.VOICE, sessionId, null, LANGUAGE_RANGES, CLIENT_TYPE).join();
+          registrationService.sendVerificationCode(MessageTransport.VOICE, sessionId, null, LANGUAGE_RANGES, CLIENT_TYPE);
 
       final ByteString expectedSenderData = ByteString.copyFromUtf8(secondVerificationCode);
 
@@ -444,24 +465,25 @@ class RegistrationServiceTest {
   }
 
   @Test
-  void checkVerificationCode() {
+  void checkVerificationCode()
+      throws SenderRejectedRequestException, RateLimitExceededException, SessionAlreadyVerifiedException, TransportNotAllowedException, SessionNotFoundException, NoVerificationCodeSentException, AttemptExpiredException {
     final AttemptData attemptData = new AttemptData(Optional.of("test"), VERIFICATION_CODE_BYTES);
 
     when(sender.sendVerificationCode(MessageTransport.SMS, PHONE_NUMBER, LANGUAGE_RANGES, CLIENT_TYPE))
-        .thenReturn(CompletableFuture.completedFuture(attemptData));
+        .thenReturn(attemptData);
 
     final UUID sessionId;
     {
-      final RegistrationSession session = registrationService.createRegistrationSession(PHONE_NUMBER, "", SESSION_METADATA).join();
+      final RegistrationSession session = registrationService.createRegistrationSession(PHONE_NUMBER, "", SESSION_METADATA);
       sessionId = UUIDUtil.uuidFromByteString(session.getId());
 
-      registrationService.sendVerificationCode(MessageTransport.SMS, sessionId, SENDER_NAME, LANGUAGE_RANGES, CLIENT_TYPE).join();
+      registrationService.sendVerificationCode(MessageTransport.SMS, sessionId, SENDER_NAME, LANGUAGE_RANGES, CLIENT_TYPE);
     }
 
     when(sender.checkVerificationCode(VERIFICATION_CODE, VERIFICATION_CODE_BYTES))
-        .thenReturn(CompletableFuture.completedFuture(true));
+        .thenReturn(true);
 
-    final RegistrationSession session = registrationService.checkVerificationCode(sessionId, VERIFICATION_CODE).join();
+    final RegistrationSession session = registrationService.checkVerificationCode(sessionId, VERIFICATION_CODE);
 
     assertEquals(VERIFICATION_CODE, session.getVerifiedCode());
     assertEquals(1, session.getCheckCodeAttempts());
@@ -471,26 +493,27 @@ class RegistrationServiceTest {
   }
 
   @Test
-  void checkVerificationCodeResend() {
+  void checkVerificationCodeResend()
+      throws SenderRejectedRequestException, RateLimitExceededException, SessionAlreadyVerifiedException, TransportNotAllowedException, SessionNotFoundException, NoVerificationCodeSentException, AttemptExpiredException {
     final AttemptData attemptData = new AttemptData(Optional.of("test"), VERIFICATION_CODE_BYTES);
 
     final UUID sessionId;
     {
-      final RegistrationSession session = registrationService.createRegistrationSession(PHONE_NUMBER, "", SESSION_METADATA).join();
+      final RegistrationSession session = registrationService.createRegistrationSession(PHONE_NUMBER, "", SESSION_METADATA);
       sessionId = UUIDUtil.uuidFromByteString(session.getId());
     }
 
     when(sender.sendVerificationCode(MessageTransport.SMS, PHONE_NUMBER, LANGUAGE_RANGES, CLIENT_TYPE))
-        .thenReturn(CompletableFuture.completedFuture(attemptData));
+        .thenReturn(attemptData);
 
-    registrationService.sendVerificationCode(MessageTransport.SMS, sessionId, SENDER_NAME, LANGUAGE_RANGES, CLIENT_TYPE).join();
+    registrationService.sendVerificationCode(MessageTransport.SMS, sessionId, SENDER_NAME, LANGUAGE_RANGES, CLIENT_TYPE);
 
     when(sender.checkVerificationCode(VERIFICATION_CODE, VERIFICATION_CODE_BYTES))
-        .thenReturn(CompletableFuture.completedFuture(false));
+        .thenReturn(false);
 
     {
       final RegistrationSession session =
-          registrationService.checkVerificationCode(sessionId, VERIFICATION_CODE).join();
+          registrationService.checkVerificationCode(sessionId, VERIFICATION_CODE);
 
       assertTrue(StringUtils.isBlank(session.getVerifiedCode()));
       assertEquals(1, session.getCheckCodeAttempts());
@@ -499,7 +522,7 @@ class RegistrationServiceTest {
 
     {
       final RegistrationSession session =
-          registrationService.sendVerificationCode(MessageTransport.SMS, sessionId, SENDER_NAME, LANGUAGE_RANGES, CLIENT_TYPE).join();
+          registrationService.sendVerificationCode(MessageTransport.SMS, sessionId, SENDER_NAME, LANGUAGE_RANGES, CLIENT_TYPE);
 
       assertTrue(StringUtils.isBlank(session.getVerifiedCode()));
       assertEquals(0, session.getCheckCodeAttempts());
@@ -510,13 +533,11 @@ class RegistrationServiceTest {
   }
 
   @Test
-  void checkVerificationCodeSessionNotFound() {
+  void checkVerificationCodeSessionNotFound() throws SenderRejectedRequestException, SessionNotFoundException {
     final UUID sessionId = UUID.randomUUID();
 
-    final CompletionException completionException = assertThrows(CompletionException.class,
-        () -> registrationService.checkVerificationCode(sessionId, VERIFICATION_CODE).join());
-
-    assertInstanceOf(SessionNotFoundException.class, CompletionExceptions.unwrap(completionException));
+    assertThrows(SessionNotFoundException.class,
+        () -> registrationService.checkVerificationCode(sessionId, VERIFICATION_CODE));
 
     verify(sessionRepository).getSession(sessionId);
     verify(sender, never()).checkVerificationCode(any(), any());
@@ -524,17 +545,18 @@ class RegistrationServiceTest {
   }
 
   @Test
-  void checkVerificationCodePreviouslyVerified() {
+  void checkVerificationCodePreviouslyVerified()
+      throws SenderRejectedRequestException, RateLimitExceededException, SessionNotFoundException, NoVerificationCodeSentException, AttemptExpiredException {
+
     final UUID sessionId = UUID.randomUUID();
 
-    when(sessionRepository.getSession(sessionId))
-        .thenReturn(CompletableFuture.completedFuture(
-            RegistrationSession.newBuilder()
-                .setPhoneNumber(PhoneNumberUtil.getInstance().format(PHONE_NUMBER, PhoneNumberUtil.PhoneNumberFormat.E164))
-                .setVerifiedCode(VERIFICATION_CODE)
-                .build()));
+    doReturn(RegistrationSession.newBuilder()
+        .setPhoneNumber(PhoneNumberUtil.getInstance().format(PHONE_NUMBER, PhoneNumberUtil.PhoneNumberFormat.E164))
+        .setVerifiedCode(VERIFICATION_CODE)
+        .build())
+        .when(sessionRepository).getSession(sessionId);
 
-    assertEquals(VERIFICATION_CODE, registrationService.checkVerificationCode(sessionId, VERIFICATION_CODE).join().getVerifiedCode());
+    assertEquals(VERIFICATION_CODE, registrationService.checkVerificationCode(sessionId, VERIFICATION_CODE).getVerifiedCode());
 
     verify(sessionRepository).getSession(sessionId);
     verify(sender, never()).checkVerificationCode(any(), any());
@@ -543,7 +565,8 @@ class RegistrationServiceTest {
 
   @ParameterizedTest
   @ValueSource(booleans = {true, false})
-  void checkVerificationCodeRateLimited(final boolean sessionLimitExceeded) {
+  void checkVerificationCodeRateLimited(final boolean sessionLimitExceeded)
+      throws SenderRejectedRequestException, RateLimitExceededException, SessionNotFoundException {
     final UUID sessionId = UUID.randomUUID();
 
     final RegistrationSession session = RegistrationSession.newBuilder()
@@ -557,24 +580,20 @@ class RegistrationServiceTest {
             .build())
         .build();
 
-    when(sessionRepository.getSession(sessionId))
-        .thenReturn(CompletableFuture.completedFuture(session));
+    doReturn(session).when(sessionRepository).getSession(sessionId);
 
     final Duration retryAfterDuration = Duration.ofMinutes(17);
 
     if (sessionLimitExceeded) {
-      when(checkVerificationCodePerSessionRateLimiter.checkRateLimit(session))
-          .thenReturn(CompletableFuture.failedFuture(new RateLimitExceededException(retryAfterDuration, session)));
+      doThrow(new RateLimitExceededException(retryAfterDuration, session))
+          .when(checkVerificationCodePerSessionRateLimiter).checkRateLimit(session);
     } else {
-      when(checkVerificationCodePerNumberRateLimiter.checkRateLimit(PHONE_NUMBER))
-          .thenReturn(CompletableFuture.failedFuture(new RateLimitExceededException(retryAfterDuration)));
+      doThrow(new RateLimitExceededException(retryAfterDuration))
+          .when(checkVerificationCodePerNumberRateLimiter).checkRateLimit(PHONE_NUMBER);
     }
 
-    final CompletionException completionException = assertThrows(CompletionException.class,
-        () -> registrationService.checkVerificationCode(sessionId, VERIFICATION_CODE).join());
-
-    final RateLimitExceededException rateLimitExceededException =
-        (RateLimitExceededException) CompletionExceptions.unwrap(completionException);
+    final RateLimitExceededException rateLimitExceededException = assertThrows(RateLimitExceededException.class,
+        () -> registrationService.checkVerificationCode(sessionId, VERIFICATION_CODE));
 
     assertEquals(Optional.of(session), rateLimitExceededException.getRegistrationSession());
     assertEquals(Optional.of(retryAfterDuration), rateLimitExceededException.getRetryAfterDuration());
@@ -584,7 +603,43 @@ class RegistrationServiceTest {
   }
 
   @Test
-  void checkRegistrationCodeAttemptExpired() {
+  void checkVerificationCodeSenderRateLimited()
+      throws SenderRejectedRequestException, SessionNotFoundException {
+
+    final UUID sessionId = UUID.randomUUID();
+
+    final RegistrationSession session = RegistrationSession.newBuilder()
+        .setId(UUIDUtil.uuidToByteString(sessionId))
+        .setPhoneNumber(PhoneNumberUtil.getInstance().format(PHONE_NUMBER, PhoneNumberUtil.PhoneNumberFormat.E164))
+        .addRegistrationAttempts(RegistrationAttempt.newBuilder()
+            .setMessageTransport(org.signal.registration.rpc.MessageTransport.MESSAGE_TRANSPORT_SMS)
+            .setSenderName(SENDER_NAME)
+            .setSenderData(ByteString.copyFrom(VERIFICATION_CODE_BYTES))
+            .setExpirationEpochMillis(CURRENT_TIME.toEpochMilli() + 1)
+            .build())
+        .build();
+
+    doReturn(session).when(sessionRepository).getSession(sessionId);
+
+    final Duration retryAfterDuration = Duration.ofMinutes(17);
+
+    when(sender.checkVerificationCode(any(), any()))
+        .thenThrow(new SenderRateLimitedRequestException(retryAfterDuration));
+
+    final RateLimitExceededException rateLimitExceededException = assertThrows(RateLimitExceededException.class,
+        () -> registrationService.checkVerificationCode(sessionId, VERIFICATION_CODE));
+
+    assertEquals(Optional.of(session), rateLimitExceededException.getRegistrationSession());
+    assertEquals(Optional.of(retryAfterDuration), rateLimitExceededException.getRetryAfterDuration());
+
+    verify(sender).checkVerificationCode(any(), any());
+    verify(sessionRepository, never()).updateSession(any(), any());
+  }
+
+  @Test
+  void checkVerificationCodeAttemptExpired()
+      throws SenderRejectedRequestException, SessionNotFoundException {
+
     final UUID sessionId = UUID.randomUUID();
 
     final RegistrationSession session = RegistrationSession.newBuilder()
@@ -598,13 +653,10 @@ class RegistrationServiceTest {
             .build())
         .build();
 
-    when(sessionRepository.getSession(sessionId))
-        .thenReturn(CompletableFuture.completedFuture(session));
+    doReturn(session).when(sessionRepository).getSession(sessionId);
 
-    final CompletionException completionException = assertThrows(CompletionException.class,
-        () -> registrationService.checkVerificationCode(sessionId, VERIFICATION_CODE).join());
-
-    assertInstanceOf(AttemptExpiredException.class, CompletionExceptions.unwrap(completionException));
+    assertThrows(AttemptExpiredException.class,
+        () -> registrationService.checkVerificationCode(sessionId, VERIFICATION_CODE));
 
     verify(sessionRepository).getSession(sessionId);
     verify(sender, never()).checkVerificationCode(any(), any());
@@ -612,24 +664,25 @@ class RegistrationServiceTest {
   }
 
   @Test
-  void checkVerificationCodeSenderRejected() {
+  void checkVerificationCodeSenderRejected()
+      throws SenderRejectedRequestException, RateLimitExceededException, SessionAlreadyVerifiedException, TransportNotAllowedException, SessionNotFoundException, NoVerificationCodeSentException, AttemptExpiredException {
     final AttemptData attemptData = new AttemptData(Optional.of("test"), VERIFICATION_CODE_BYTES);
 
     when(sender.sendVerificationCode(MessageTransport.SMS, PHONE_NUMBER, LANGUAGE_RANGES, CLIENT_TYPE))
-        .thenReturn(CompletableFuture.completedFuture(attemptData));
+        .thenReturn(attemptData);
 
     final UUID sessionId;
     {
-      final RegistrationSession session = registrationService.createRegistrationSession(PHONE_NUMBER, "", SESSION_METADATA).join();
+      final RegistrationSession session = registrationService.createRegistrationSession(PHONE_NUMBER, "", SESSION_METADATA);
       sessionId = UUIDUtil.uuidFromByteString(session.getId());
 
-      registrationService.sendVerificationCode(MessageTransport.SMS, sessionId, SENDER_NAME, LANGUAGE_RANGES, CLIENT_TYPE).join();
+      registrationService.sendVerificationCode(MessageTransport.SMS, sessionId, SENDER_NAME, LANGUAGE_RANGES, CLIENT_TYPE);
     }
 
     when(sender.checkVerificationCode(VERIFICATION_CODE, VERIFICATION_CODE_BYTES))
-        .thenReturn(CompletableFuture.failedFuture(new CompletionException(new SenderRejectedRequestException("sender rejected"))));
+        .thenThrow(new SenderRejectedRequestException("sender rejected"));
 
-    final RegistrationSession session = registrationService.checkVerificationCode(sessionId, VERIFICATION_CODE).join();
+    final RegistrationSession session = registrationService.checkVerificationCode(sessionId, VERIFICATION_CODE);
 
     assertTrue(session.getVerifiedCode().isEmpty());
     assertEquals(1, session.getCheckCodeAttempts());
@@ -651,22 +704,15 @@ class RegistrationServiceTest {
     final long nextCodeCheckSeconds = 23;
 
     when(sendSmsVerificationCodePerSessionRateLimiter.getTimeOfNextAction(any()))
-        .thenReturn(CompletableFuture.completedFuture(allowSms
-            ? Optional.of(CURRENT_TIME.plusSeconds(nextSmsSeconds))
-            : Optional.empty()));
+        .thenReturn(allowSms ? Optional.of(CURRENT_TIME.plusSeconds(nextSmsSeconds)) : Optional.empty());
 
     when(sendVoiceVerificationCodePerSessionRateLimiter.getTimeOfNextAction(any()))
-        .thenReturn(CompletableFuture.completedFuture(allowVoiceCall
-            ? Optional.of(CURRENT_TIME.plusSeconds(nextVoiceCallSeconds))
-            : Optional.empty()));
+        .thenReturn(allowVoiceCall ? Optional.of(CURRENT_TIME.plusSeconds(nextVoiceCallSeconds)) : Optional.empty());
 
     when(checkVerificationCodePerSessionRateLimiter.getTimeOfNextAction(any()))
-        .thenReturn(CompletableFuture.completedFuture(allowCodeCheck
-            ? Optional.of(CURRENT_TIME.plusSeconds(nextCodeCheckSeconds))
-            : Optional.empty()));
+        .thenReturn(allowCodeCheck ? Optional.of(CURRENT_TIME.plusSeconds(nextCodeCheckSeconds)) : Optional.empty());
 
-    final RegistrationService.NextActionTimes nextActionTimes =
-        registrationService.getNextActionTimes(session).toCompletableFuture().join();
+    final RegistrationService.NextActionTimes nextActionTimes = registrationService.getNextActionTimes(session);
 
     assertEquals(expectNextSms ? Optional.of(CURRENT_TIME.plusSeconds(nextSmsSeconds)) : Optional.empty(),
         nextActionTimes.nextSms());
@@ -693,22 +739,15 @@ class RegistrationServiceTest {
     final long nextCodeCheckSeconds = 23;
 
     when(sendSmsVerificationCodePerSessionRateLimiter.getTimeOfNextAction(any()))
-        .thenReturn(CompletableFuture.completedFuture(allowSms
-            ? Optional.of(CURRENT_TIME.plusSeconds(nextSmsSeconds))
-            : Optional.empty()));
+        .thenReturn(allowSms ? Optional.of(CURRENT_TIME.plusSeconds(nextSmsSeconds)) : Optional.empty());
 
     when(sendVoiceVerificationCodePerSessionRateLimiter.getTimeOfNextAction(any()))
-        .thenReturn(CompletableFuture.completedFuture(allowVoiceCall
-            ? Optional.of(CURRENT_TIME.plusSeconds(nextVoiceCallSeconds))
-            : Optional.empty()));
+        .thenReturn(allowVoiceCall ? Optional.of(CURRENT_TIME.plusSeconds(nextVoiceCallSeconds)) : Optional.empty());
 
     when(checkVerificationCodePerSessionRateLimiter.getTimeOfNextAction(any()))
-        .thenReturn(CompletableFuture.completedFuture(allowCodeCheck
-            ? Optional.of(CURRENT_TIME.plusSeconds(nextCodeCheckSeconds))
-            : Optional.empty()));
+        .thenReturn(allowCodeCheck ? Optional.of(CURRENT_TIME.plusSeconds(nextCodeCheckSeconds)) : Optional.empty());
 
-    final RegistrationSessionMetadata sessionMetadata =
-        registrationService.buildSessionMetadata(session).toCompletableFuture().join();
+    final RegistrationSessionMetadata sessionMetadata = registrationService.buildSessionMetadata(session);
 
     assertEquals(session.getId(), sessionMetadata.getSessionId());
     assertEquals(
@@ -829,13 +868,13 @@ class RegistrationServiceTest {
   @Test
   void buildSessionMetadataActionInPast() {
     when(sendSmsVerificationCodePerSessionRateLimiter.getTimeOfNextAction(any()))
-        .thenReturn(CompletableFuture.completedFuture(Optional.of(CURRENT_TIME.minusSeconds(17))));
+        .thenReturn(Optional.of(CURRENT_TIME.minusSeconds(17)));
 
     when(sendVoiceVerificationCodePerSessionRateLimiter.getTimeOfNextAction(any()))
-        .thenReturn(CompletableFuture.completedFuture(Optional.of(CURRENT_TIME.minusSeconds(19))));
+        .thenReturn(Optional.of(CURRENT_TIME.minusSeconds(19)));
 
     when(checkVerificationCodePerSessionRateLimiter.getTimeOfNextAction(any()))
-        .thenReturn(CompletableFuture.completedFuture(Optional.of(CURRENT_TIME.minusSeconds(23))));
+        .thenReturn(Optional.of(CURRENT_TIME.minusSeconds(23)));
 
     final RegistrationSession session = getBaseSessionBuilder()
         .setCreatedEpochMillis(CURRENT_TIME.toEpochMilli())
@@ -846,7 +885,7 @@ class RegistrationServiceTest {
             .build())
         .build();
 
-    final RegistrationSessionMetadata metadata = registrationService.buildSessionMetadata(session).toCompletableFuture().join();
+    final RegistrationSessionMetadata metadata = registrationService.buildSessionMetadata(session);
 
     assertTrue(metadata.getMayRequestSms());
     assertEquals(0, metadata.getNextSmsSeconds());
@@ -859,24 +898,25 @@ class RegistrationServiceTest {
   }
 
   @Test
-  void checkVerificationCodeSenderException() {
+  void checkVerificationCodeSenderException()
+      throws SenderRejectedRequestException, RateLimitExceededException, SessionAlreadyVerifiedException, TransportNotAllowedException, SessionNotFoundException, NoVerificationCodeSentException, AttemptExpiredException {
     final AttemptData attemptData = new AttemptData(Optional.of("test"), VERIFICATION_CODE_BYTES);
 
     when(sender.sendVerificationCode(any(), any(), any(), any()))
-        .thenReturn(CompletableFuture.completedFuture(attemptData));
+        .thenReturn(attemptData);
 
     final UUID sessionId;
     {
-      final RegistrationSession session = registrationService.createRegistrationSession(PHONE_NUMBER, "", SESSION_METADATA).join();
+      final RegistrationSession session = registrationService.createRegistrationSession(PHONE_NUMBER, "", SESSION_METADATA);
       sessionId = UUIDUtil.uuidFromByteString(session.getId());
 
-      registrationService.sendVerificationCode(MessageTransport.SMS, sessionId, SENDER_NAME, LANGUAGE_RANGES, CLIENT_TYPE).join();
+      registrationService.sendVerificationCode(MessageTransport.SMS, sessionId, SENDER_NAME, LANGUAGE_RANGES, CLIENT_TYPE);
     }
 
     when(sender.checkVerificationCode(VERIFICATION_CODE, VERIFICATION_CODE_BYTES))
-        .thenReturn(CompletableFuture.failedFuture(new SenderRejectedRequestException(new RuntimeException("OH NO"))));
+        .thenThrow(new SenderRejectedRequestException(new RuntimeException("OH NO")));
 
-    final RegistrationSession session = registrationService.checkVerificationCode(sessionId, VERIFICATION_CODE).join();
+    final RegistrationSession session = registrationService.checkVerificationCode(sessionId, VERIFICATION_CODE);
 
     assertTrue(StringUtils.isBlank(session.getVerifiedCode()));
     assertEquals(1, session.getCheckCodeAttempts());
@@ -893,8 +933,7 @@ class RegistrationServiceTest {
       final List<Instant> attemptExpirations,
       final Instant expectedExpiration) {
 
-    when(sendSmsVerificationCodePerSessionRateLimiter.getTimeOfNextAction(any()))
-        .thenReturn(CompletableFuture.completedFuture(nextSms));
+    when(sendSmsVerificationCodePerSessionRateLimiter.getTimeOfNextAction(any())).thenReturn(nextSms);
 
     final RegistrationSession.Builder sessionBuilder = RegistrationSession.newBuilder()
         .setCreatedEpochMillis(sessionCreation.toEpochMilli())
@@ -911,8 +950,7 @@ class RegistrationServiceTest {
             .build())
         .forEach(sessionBuilder::addRegistrationAttempts);
 
-    assertEquals(expectedExpiration,
-        registrationService.getSessionExpiration(sessionBuilder.build()).toCompletableFuture().join());
+    assertEquals(expectedExpiration, registrationService.getSessionExpiration(sessionBuilder.build()));
   }
 
   private static Stream<Arguments> getSessionExpiration() {

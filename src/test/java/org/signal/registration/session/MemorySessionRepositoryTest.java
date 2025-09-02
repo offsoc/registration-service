@@ -6,9 +6,7 @@
 package org.signal.registration.session;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -18,9 +16,6 @@ import io.micronaut.context.event.ApplicationEventPublisher;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -44,13 +39,13 @@ class MemorySessionRepositoryTest extends AbstractSessionRepositoryTest {
   }
 
   @Test
-  void getSessionExpired() {
+  void getSessionExpired() throws SessionNotFoundException {
     final MemorySessionRepository repository = getRepository();
 
     final Instant now = Instant.now();
     when(getClock().instant()).thenReturn(now);
 
-    final RegistrationSession createdSession = repository.createSession(PHONE_NUMBER, SESSION_METADATA, getClock().instant().plus(TTL)).join();
+    final RegistrationSession createdSession = repository.createSession(PHONE_NUMBER, SESSION_METADATA, getClock().instant().plus(TTL));
     final UUID sessionId = UUIDUtil.uuidFromByteString(createdSession.getId());
 
     final RegistrationSession expectedSession = RegistrationSession.newBuilder()
@@ -61,31 +56,28 @@ class MemorySessionRepositoryTest extends AbstractSessionRepositoryTest {
         .setSessionMetadata(SESSION_METADATA)
         .build();
 
-    assertEquals(expectedSession, repository.getSession(sessionId).join());
+    assertEquals(expectedSession, repository.getSession(sessionId));
 
     when(getClock().instant()).thenReturn(now.plus(TTL).plus(Duration.ofSeconds(1)));
 
-    final CompletionException completionException =
-        assertThrows(CompletionException.class, () -> repository.getSession(sessionId).join());
-
-    assertTrue(completionException.getCause() instanceof SessionNotFoundException);
+    assertThrows(SessionNotFoundException.class, () -> repository.getSession(sessionId));
 
     verify(sessionCompletedEventPublisher).publishEventAsync(new SessionCompletedEvent(expectedSession));
   }
 
   @Test
-  void updateSessionExpired() {
+  void updateSessionExpired() throws SessionNotFoundException {
     final MemorySessionRepository repository = getRepository();
     final String verificationCode = "123456";
 
     final Instant now = Instant.now();
     when(getClock().instant()).thenReturn(now);
 
-    final Function<RegistrationSession, CompletionStage<RegistrationSession>> setVerifiedCodeFunction =
-        session -> CompletableFuture.completedFuture(session.toBuilder().setVerifiedCode(verificationCode).build());
+    final Function<RegistrationSession, RegistrationSession> setVerifiedCodeFunction =
+        session -> session.toBuilder().setVerifiedCode(verificationCode).build();
 
-    final UUID sessionId = UUIDUtil.uuidFromByteString(repository.createSession(PHONE_NUMBER, SESSION_METADATA, getClock().instant().plus(TTL)).join().getId());
-    repository.updateSession(sessionId, setVerifiedCodeFunction).join();
+    final UUID sessionId = UUIDUtil.uuidFromByteString(repository.createSession(PHONE_NUMBER, SESSION_METADATA, getClock().instant().plus(TTL)).getId());
+    repository.updateSession(sessionId, setVerifiedCodeFunction);
 
     final RegistrationSession expectedSession = RegistrationSession.newBuilder()
         .setId(UUIDUtil.uuidToByteString(sessionId))
@@ -96,15 +88,11 @@ class MemorySessionRepositoryTest extends AbstractSessionRepositoryTest {
         .setSessionMetadata(SESSION_METADATA)
         .build();
 
-    assertEquals(expectedSession, repository.getSession(sessionId).join());
+    assertEquals(expectedSession, repository.getSession(sessionId));
 
     when(getClock().instant()).thenReturn(now.plus(TTL).plus(Duration.ofSeconds(1)));
 
-    final CompletionException completionException =
-        assertThrows(CompletionException.class,
-            () -> repository.updateSession(sessionId, setVerifiedCodeFunction).join());
-
-    assertInstanceOf(SessionNotFoundException.class, completionException.getCause());
+    assertThrows(SessionNotFoundException.class, () -> repository.updateSession(sessionId, setVerifiedCodeFunction));
 
     verify(sessionCompletedEventPublisher).publishEventAsync(new SessionCompletedEvent(expectedSession));
   }
@@ -120,7 +108,7 @@ class MemorySessionRepositoryTest extends AbstractSessionRepositoryTest {
 
     final Instant expiration = getClock().instant().plus(TTL);
 
-    final RegistrationSession session = repository.createSession(PHONE_NUMBER, SESSION_METADATA, expiration).join();
+    final RegistrationSession session = repository.createSession(PHONE_NUMBER, SESSION_METADATA, expiration);
 
     assertEquals(1, repository.size());
 

@@ -12,12 +12,10 @@ import io.micronaut.context.BeanProvider;
 import io.micronaut.context.event.BeanCreatedEvent;
 import io.micronaut.context.event.BeanCreatedEventListener;
 import jakarta.inject.Singleton;
-import org.signal.registration.ratelimit.RateLimitExceededException;
-import org.signal.registration.ratelimit.RateLimiter;
-import org.signal.registration.util.CompletionExceptions;
 import java.time.Instant;
 import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
+import org.signal.registration.ratelimit.RateLimitExceededException;
+import org.signal.registration.ratelimit.RateLimiter;
 
 /**
  * The rate limiter metrics binder wraps newly-created rate limiters in a proxy that measures the time taken to check
@@ -49,23 +47,25 @@ public class RateLimiterMetricsBinder implements BeanCreatedEventListener<RateLi
     }
 
     @Override
-    public CompletableFuture<Optional<Instant>> getTimeOfNextAction(final K key) {
+    public Optional<Instant> getTimeOfNextAction(final K key) {
       return delegate.getTimeOfNextAction(key);
     }
 
     @Override
-    public CompletableFuture<Void> checkRateLimit(final K key) {
+    public void checkRateLimit(final K key) throws RateLimitExceededException {
       final Timer.Sample sample = Timer.start();
+      boolean rateLimited = false;
 
-      return delegate.checkRateLimit(key)
-          .whenComplete((ignored, throwable) -> {
-            final boolean actionRateLimited =
-                CompletionExceptions.unwrap(throwable) instanceof RateLimitExceededException;
-
-            sample.stop(meterRegistry.timer(CHECK_RATE_LIMIT_TIMER_NAME,
-                NAME_TAG, name,
-                ACTION_RATE_LIMITED_TAG, String.valueOf(actionRateLimited)));
-          });
+      try {
+        delegate.checkRateLimit(key);
+      } catch (final RateLimitExceededException e) {
+        rateLimited = true;
+        throw e;
+      } finally {
+        sample.stop(meterRegistry.timer(CHECK_RATE_LIMIT_TIMER_NAME,
+            NAME_TAG, name,
+            ACTION_RATE_LIMITED_TAG, String.valueOf(rateLimited)));
+      }
     }
   }
 

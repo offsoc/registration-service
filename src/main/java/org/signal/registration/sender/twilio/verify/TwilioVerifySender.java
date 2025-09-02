@@ -8,25 +8,23 @@ package org.signal.registration.sender.twilio.verify;
 import com.google.i18n.phonenumbers.PhoneNumberUtil;
 import com.google.i18n.phonenumbers.Phonenumber;
 import com.google.protobuf.InvalidProtocolBufferException;
+import com.twilio.exception.ApiException;
 import com.twilio.http.TwilioRestClient;
 import com.twilio.rest.verify.v2.service.Verification;
 import com.twilio.rest.verify.v2.service.VerificationCheck;
-import com.twilio.rest.verify.v2.service.VerificationCheckCreator;
 import com.twilio.rest.verify.v2.service.VerificationCreator;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tags;
 import io.micrometer.core.instrument.Timer;
-import io.micronaut.context.annotation.Value;
 import jakarta.inject.Singleton;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.time.Duration;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
-import java.util.function.Supplier;
 import org.apache.commons.lang3.StringUtils;
 import org.signal.registration.metrics.MetricsUtil;
 import org.signal.registration.sender.ApiClientInstrumenter;
@@ -34,15 +32,12 @@ import org.signal.registration.sender.AttemptData;
 import org.signal.registration.sender.ClientType;
 import org.signal.registration.sender.MessageTransport;
 import org.signal.registration.sender.SenderInvalidParametersException;
+import org.signal.registration.sender.SenderRejectedRequestException;
 import org.signal.registration.sender.UnsupportedMessageTransportException;
 import org.signal.registration.sender.VerificationCodeSender;
-import org.signal.registration.sender.twilio.ApiExceptions;
-import org.signal.registration.util.CompletionExceptions;
+import org.signal.registration.sender.twilio.TwilioExceptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import reactor.core.Exceptions;
-import reactor.core.publisher.Mono;
-import reactor.util.retry.Retry;
 
 /**
  * A Twilio Verify sender sends verification codes to end users via Twilio Verify.
@@ -58,8 +53,6 @@ public class TwilioVerifySender implements VerificationCodeSender {
   private final TwilioRestClient twilioRestClient;
   private final TwilioVerifyConfiguration configuration;
   private final ApiClientInstrumenter apiClientInstrumenter;
-  private final Duration minRetryWait;
-  private final int maxRetries;
 
 
   private static final String INVALID_PARAM_NAME = MetricsUtil.name(TwilioVerifySender.class, "invalidParam");
@@ -73,15 +66,11 @@ public class TwilioVerifySender implements VerificationCodeSender {
       final MeterRegistry meterRegistry,
       final TwilioRestClient twilioRestClient,
       final TwilioVerifyConfiguration configuration,
-      final ApiClientInstrumenter apiClientInstrumenter,
-      final @Value("${twilio.min-retry-wait:100ms}") Duration minRetryWait,
-      final @Value("${twilio.max-retries:5}") int maxRetries) {
+      final ApiClientInstrumenter apiClientInstrumenter) {
     this.meterRegistry = meterRegistry;
     this.twilioRestClient = twilioRestClient;
     this.configuration = configuration;
     this.apiClientInstrumenter = apiClientInstrumenter;
-    this.minRetryWait = minRetryWait;
-    this.maxRetries = maxRetries;
   }
 
   @Override
@@ -114,10 +103,10 @@ public class TwilioVerifySender implements VerificationCodeSender {
   }
 
   @Override
-  public CompletableFuture<AttemptData> sendVerificationCode(final MessageTransport messageTransport,
-                                                             final Phonenumber.PhoneNumber phoneNumber,
-                                                             final List<Locale.LanguageRange> languageRanges,
-                                                             final ClientType clientType) throws UnsupportedMessageTransportException {
+  public AttemptData sendVerificationCode(final MessageTransport messageTransport,
+      final Phonenumber.PhoneNumber phoneNumber,
+      final List<Locale.LanguageRange> languageRanges,
+      final ClientType clientType) throws SenderRejectedRequestException {
 
     final Verification.Channel channel = CHANNELS_BY_TRANSPORT.get(messageTransport);
 
@@ -152,94 +141,94 @@ public class TwilioVerifySender implements VerificationCodeSender {
     final Timer.Sample sample = Timer.start();
     final String endpointName = "verification." + messageTransport.name().toLowerCase() + ".create";
 
-    return withRetries(() -> verificationCreator.createAsync(twilioRestClient), endpointName)
-        .toCompletableFuture()
-        .whenComplete((sessionData, throwable) ->
-            this.apiClientInstrumenter.recordApiCallMetrics(
-                this.getName(),
-                endpointName,
-                throwable == null,
-                ApiExceptions.extractErrorCode(throwable),
-                sample)
-        )
-        .handle((verification, throwable) -> {
-          if (throwable == null) {
-            final Optional<String> maybeAttemptSid = verification.getSendCodeAttempts().stream()
-                .filter(attempt -> attempt.containsKey("attempt_sid"))
-                .findFirst()
-                .map(attempt -> attempt.get("attempt_sid").toString());
+    try {
+      final Verification verification = verificationCreator.create(twilioRestClient);
 
-            return new AttemptData(maybeAttemptSid, TwilioVerifySessionData.newBuilder()
-                .setVerificationSid(verification.getSid())
-                .build()
-                .toByteArray());
-          }
+      final Optional<String> maybeAttemptSid = verification.getSendCodeAttempts().stream()
+          .filter(attempt -> attempt.containsKey("attempt_sid"))
+          .findFirst()
+          .map(attempt -> attempt.get("attempt_sid").toString());
 
-          final Throwable exception = ApiExceptions.toSenderException(throwable);
-          if (exception instanceof SenderInvalidParametersException p) {
-            final String regionCode = PhoneNumberUtil.getInstance().getRegionCodeForNumber(phoneNumber);
-            final Tags tags = p.getParamName().map(param -> switch (param) {
-                  case NUMBER -> Tags.of("paramType", "number",
-                      MetricsUtil.TRANSPORT_TAG_NAME, messageTransport.name(),
-                      MetricsUtil.REGION_CODE_TAG_NAME, StringUtils.defaultIfBlank(regionCode, "XX"));
-                  case LOCALE -> Tags.of("paramType", "locale",
-                      "locale", locale,
-                      MetricsUtil.TRANSPORT_TAG_NAME, messageTransport.name());
-                })
-                .orElse(Tags.of("paramType", "unknown"));
-            meterRegistry.counter(INVALID_PARAM_NAME, tags).increment();
-          }
-          throw CompletionExceptions.wrap(exception);
-        });
+      this.apiClientInstrumenter.recordApiCallMetrics(
+          this.getName(),
+          endpointName,
+          true,
+          null,
+          sample);
+
+      return new AttemptData(maybeAttemptSid, TwilioVerifySessionData.newBuilder()
+          .setVerificationSid(verification.getSid())
+          .build()
+          .toByteArray());
+    } catch (final ApiException e) {
+      this.apiClientInstrumenter.recordApiCallMetrics(
+          this.getName(),
+          endpointName,
+          false,
+          TwilioExceptions.extractErrorCode(e),
+          sample);
+
+      final Optional<SenderRejectedRequestException> maybeSenderRejectedRequestException =
+          TwilioExceptions.toSenderRejectedException(e);
+
+      maybeSenderRejectedRequestException.ifPresent(senderRejectedRequestException -> {
+        if (senderRejectedRequestException instanceof SenderInvalidParametersException senderInvalidParametersException) {
+          final String regionCode = PhoneNumberUtil.getInstance().getRegionCodeForNumber(phoneNumber);
+          final Tags tags = senderInvalidParametersException.getParamName().map(param -> switch (param) {
+                case NUMBER -> Tags.of("paramType", "number",
+                    MetricsUtil.TRANSPORT_TAG_NAME, messageTransport.name(),
+                    MetricsUtil.REGION_CODE_TAG_NAME, StringUtils.defaultIfBlank(regionCode, "XX"));
+                case LOCALE -> Tags.of("paramType", "locale",
+                    "locale", locale,
+                    MetricsUtil.TRANSPORT_TAG_NAME, messageTransport.name());
+              })
+              .orElse(Tags.of("paramType", "unknown"));
+
+          meterRegistry.counter(INVALID_PARAM_NAME, tags).increment();
+        }
+      });
+
+      throw maybeSenderRejectedRequestException.orElseThrow(() -> new UncheckedIOException(new IOException(e)));
+    }
   }
 
   @Override
-  public CompletableFuture<Boolean> checkVerificationCode(final String verificationCode, final byte[] senderData) {
+  public boolean checkVerificationCode(final String verificationCode, final byte[] senderData)
+      throws SenderRejectedRequestException {
+
     try {
       final String verificationSid = TwilioVerifySessionData.parseFrom(senderData).getVerificationSid();
 
       final Timer.Sample sample = Timer.start();
 
-      final VerificationCheckCreator creator = VerificationCheck.creator(
-              configuration.serviceSid())
-          .setVerificationSid(verificationSid)
-          .setCode(verificationCode);
-      return withRetries(() -> creator.createAsync(twilioRestClient), "verification_check.create")
-          .thenApply(VerificationCheck::getValid)
-          .handle((verificationCheck, throwable) -> {
-            if (throwable == null) {
-              return verificationCheck;
-            }
+      try {
+        final VerificationCheck verificationCheck = VerificationCheck.creator(configuration.serviceSid())
+            .setVerificationSid(verificationSid)
+            .setCode(verificationCode)
+            .create(twilioRestClient);
 
-            throw CompletionExceptions.wrap(ApiExceptions.toSenderException(throwable));
-          })
-          .whenComplete((verificationCheck, throwable) ->
-              apiClientInstrumenter.recordApiCallMetrics(
-                  this.getName(),
-                  "verification_check.create",
-                  throwable == null,
-                  ApiExceptions.extractErrorCode(throwable),
-                  sample))
-          .toCompletableFuture();
+        apiClientInstrumenter.recordApiCallMetrics(
+            this.getName(),
+            "verification_check.create",
+            true,
+            null,
+            sample);
+
+        return verificationCheck.getValid();
+      } catch (final ApiException e) {
+        apiClientInstrumenter.recordApiCallMetrics(
+            this.getName(),
+            "verification_check.create",
+            false,
+            TwilioExceptions.extractErrorCode(e),
+            sample);
+
+        throw TwilioExceptions.toSenderRejectedException(e)
+            .orElseThrow(() -> new UncheckedIOException(new IOException(e)));
+      }
     } catch (final InvalidProtocolBufferException e) {
       logger.error("Failed to parse stored session data", e);
-      return CompletableFuture.failedFuture(e);
+      throw new UncheckedIOException(e);
     }
-  }
-
-  <T> CompletionStage<T> withRetries(
-      final Supplier<CompletionStage<T>> supp,
-      final String endpointName) {
-    return Mono.defer(() -> Mono.fromCompletionStage(supp))
-        .retryWhen(Retry
-            .backoff(maxRetries, minRetryWait)
-            .filter(ApiExceptions::isRetriable)
-            .doBeforeRetry(retrySignal ->
-              this.apiClientInstrumenter.recordApiRetry(
-                  this.getName(),
-                  endpointName,
-                  ApiExceptions.extractErrorCode(retrySignal.failure()))))
-        .onErrorMap(Exceptions::isRetryExhausted, Throwable::getCause)
-        .toFuture();
   }
 }

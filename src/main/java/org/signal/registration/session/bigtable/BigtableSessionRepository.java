@@ -24,9 +24,7 @@ import io.micrometer.core.instrument.Timer;
 import io.micronaut.context.annotation.Primary;
 import io.micronaut.context.annotation.Requires;
 import io.micronaut.context.event.ApplicationEventPublisher;
-import io.micronaut.scheduling.TaskExecutors;
 import io.micronaut.scheduling.annotation.Scheduled;
-import jakarta.inject.Named;
 import jakarta.inject.Singleton;
 import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
@@ -34,28 +32,20 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
-import java.util.Optional;
+import java.util.Objects;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.Executor;
 import java.util.function.Function;
+import java.util.stream.Stream;
 import javax.annotation.Nullable;
-import org.reactivestreams.Publisher;
 import org.signal.registration.metrics.MetricsUtil;
 import org.signal.registration.session.RegistrationSession;
 import org.signal.registration.session.SessionCompletedEvent;
 import org.signal.registration.session.SessionMetadata;
 import org.signal.registration.session.SessionNotFoundException;
 import org.signal.registration.session.SessionRepository;
-import org.signal.registration.util.CompletionExceptions;
-import org.signal.registration.util.GoogleApiUtil;
-import org.signal.registration.util.ReactiveResponseObserver;
 import org.signal.registration.util.UUIDUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
 
 /**
  * A Bigtable session repository stores sessions in a <a href="https://cloud.google.com/bigtable">Cloud Bigtable</a>
@@ -73,7 +63,6 @@ import reactor.core.publisher.Mono;
 class BigtableSessionRepository implements SessionRepository {
 
   private final BigtableDataClient bigtableDataClient;
-  private final Executor executor;
   private final ApplicationEventPublisher<SessionCompletedEvent> sessionCompletedEventPublisher;
   private final Clock clock;
   
@@ -94,21 +83,19 @@ class BigtableSessionRepository implements SessionRepository {
   static final Duration REMOVAL_TTL_PADDING = Duration.ofMinutes(5);
 
   @VisibleForTesting
-  static final int MAX_UPDATE_RETRIES = 3;
+  static final int MAX_UPDATE_ATTEMPTS = 3;
 
   private static final ByteString EPOCH_BYTE_STRING = instantToByteString(Instant.EPOCH);
 
   private static final Logger logger = LoggerFactory.getLogger(BigtableSessionRepository.class);
 
   public BigtableSessionRepository(final BigtableDataClient bigtableDataClient,
-      @Named(TaskExecutors.IO) final Executor executor,
       final ApplicationEventPublisher<SessionCompletedEvent> sessionCompletedEventPublisher,
       final BigtableSessionRepositoryConfiguration configuration,
       final Clock clock,
       final MeterRegistry meterRegistry) {
 
     this.bigtableDataClient = bigtableDataClient;
-    this.executor = executor;
     this.sessionCompletedEventPublisher = sessionCompletedEventPublisher;
     this.clock = clock;
     
@@ -123,158 +110,140 @@ class BigtableSessionRepository implements SessionRepository {
 
   @Scheduled(fixedDelay = "${session-repository.bigtable.remove-expired-sessions-interval:10s}")
   @VisibleForTesting
-  CompletableFuture<Void> deleteExpiredSessions() {
-    return Flux.from(getSessionsPendingRemoval())
-        .flatMap(this::removeExpiredSession)
-        .doOnNext(session -> {
+  void deleteExpiredSessions() {
+    getSessionsPendingRemoval()
+        .forEach(session -> {
+          removeExpiredSession(session);
+
           try {
             sessionCompletedEventPublisher.publishEvent(new SessionCompletedEvent(session));
           } catch (Exception e) {
             logger.error("Error publishing SessionCompletion event", e);
           }
-        })
-        .last()
-        .toFuture()
-        .thenAccept(ignored -> {});
+        });
   }
 
-  private Publisher<RegistrationSession> getSessionsPendingRemoval() {
+  private Stream<RegistrationSession> getSessionsPendingRemoval() {
     // Sessions who are going to expire in the next REMOVAL_TTL_PADDING time interval
     // are eligible to be processed. If we fail to remove these sessions, Bigtable will
     // remove them after REMOVAL_TTL_PADDING time has elapsed
     final Filters.ValueRangeFilter removalTimeRange = Filters.FILTERS.value().range().of(
         EPOCH_BYTE_STRING,
         instantToByteString(clock.instant().plus(REMOVAL_TTL_PADDING)));
-    return ReactiveResponseObserver.<Row>asFlux(responseObserver -> bigtableDataClient.readRowsAsync(
-        Query.create(tableId)
+
+    return bigtableDataClient.readRows(Query.create(tableId)
         .filter(Filters.FILTERS.condition(Filters.FILTERS.chain()
                 .filter(Filters.FILTERS.family().exactMatch(columnFamilyName))
                 .filter(Filters.FILTERS.qualifier().exactMatch(REMOVAL_COLUMN_NAME))
                 .filter(removalTimeRange))
             .then(Filters.FILTERS.chain()
                 .filter(Filters.FILTERS.pass())
-                .filter(Filters.FILTERS.limit().cellsPerColumn(1)))),
-        responseObserver))
+                .filter(Filters.FILTERS.limit().cellsPerColumn(1)))))
+        .stream()
         .map(row -> {
           try {
-            return Optional.of(extractSession(row));
+            return extractSession(row);
           } catch (final SessionNotFoundException e) {
-            return Optional.<RegistrationSession>empty();
+            return null;
           }
         })
-        .filter(Optional::isPresent)
-        .map(Optional::get);
+        .filter(Objects::nonNull);
   }
 
   @VisibleForTesting
-  Mono<RegistrationSession> removeExpiredSession(final RegistrationSession session) {
+  boolean removeExpiredSession(final RegistrationSession session) {
     final Timer.Sample sample = Timer.start();
 
-    return Mono.fromFuture(GoogleApiUtil.toCompletableFuture(
-            bigtableDataClient.checkAndMutateRowAsync(
-                ConditionalRowMutation.create(tableId, session.getId())
-                    .condition(Filters.FILTERS.chain()
-                        .filter(Filters.FILTERS.family().exactMatch(columnFamilyName))
-                        .filter(Filters.FILTERS.qualifier().exactMatch(DATA_COLUMN_NAME))
-                        .filter(Filters.FILTERS.value().exactMatch(session.toByteString())))
-                    .then(Mutation.create().deleteRow())),
-            executor))
-        .filter(deleted -> deleted)
-        .doOnNext(ignored -> sample.stop(deleteSessionTimer))
-        .map(ignored -> session);
+    final boolean deleted = bigtableDataClient.checkAndMutateRow(ConditionalRowMutation.create(tableId, session.getId())
+        .condition(Filters.FILTERS.chain()
+            .filter(Filters.FILTERS.family().exactMatch(columnFamilyName))
+            .filter(Filters.FILTERS.qualifier().exactMatch(DATA_COLUMN_NAME))
+            .filter(Filters.FILTERS.value().exactMatch(session.toByteString())))
+        .then(Mutation.create().deleteRow()));
+
+    if (deleted) {
+      sample.stop(deleteSessionTimer);
+    }
+
+    return deleted;
   }
 
   @Override
-  public CompletableFuture<RegistrationSession> createSession(final Phonenumber.PhoneNumber phoneNumber,
-      final SessionMetadata sessionMetadata, final Instant expiration) {
+  public RegistrationSession createSession(final Phonenumber.PhoneNumber phoneNumber,
+      final SessionMetadata sessionMetadata,
+      final Instant expiration) {
 
-    final Timer.Sample sample = Timer.start();
+    return createSessionTimer.record(() -> {
+      final UUID sessionId = UUID.randomUUID();
 
-    final UUID sessionId = UUID.randomUUID();
+      final RegistrationSession session = RegistrationSession.newBuilder()
+          .setId(UUIDUtil.uuidToByteString(sessionId))
+          .setPhoneNumber(PhoneNumberUtil.getInstance().format(phoneNumber, PhoneNumberUtil.PhoneNumberFormat.E164))
+          .setCreatedEpochMillis(clock.instant().toEpochMilli())
+          .setExpirationEpochMillis(expiration.toEpochMilli())
+          .setSessionMetadata(sessionMetadata)
+          .build();
 
-    final RegistrationSession session = RegistrationSession.newBuilder()
-        .setId(UUIDUtil.uuidToByteString(sessionId))
-        .setPhoneNumber(PhoneNumberUtil.getInstance().format(phoneNumber, PhoneNumberUtil.PhoneNumberFormat.E164))
-        .setCreatedEpochMillis(clock.instant().toEpochMilli())
-        .setExpirationEpochMillis(expiration.toEpochMilli())
-        .setSessionMetadata(sessionMetadata)
-        .build();
+      bigtableDataClient.mutateRow(RowMutation.create(tableId, UUIDUtil.uuidToByteString(sessionId))
+          .setCell(columnFamilyName, DATA_COLUMN_NAME, session.toByteString())
+          .setCell(columnFamilyName, REMOVAL_COLUMN_NAME, instantToByteString(expiration.plus(REMOVAL_TTL_PADDING))));
 
-    return GoogleApiUtil.toCompletableFuture(
-            bigtableDataClient.mutateRowAsync(
-                RowMutation.create(tableId, UUIDUtil.uuidToByteString(sessionId))
-                    .setCell(columnFamilyName, DATA_COLUMN_NAME, session.toByteString())
-                    .setCell(columnFamilyName, REMOVAL_COLUMN_NAME, instantToByteString(expiration.plus(REMOVAL_TTL_PADDING)))),
-            executor)
-        .thenApply(ignored -> session)
-        .whenComplete((ignored, throwable) -> sample.stop(createSessionTimer));
+      return session;
+    });
   }
 
   @Override
-  public CompletableFuture<RegistrationSession> getSession(final UUID sessionId) {
+  public RegistrationSession getSession(final UUID sessionId) throws SessionNotFoundException {
     final Timer.Sample sample = Timer.start();
 
-    return GoogleApiUtil.toCompletableFuture(
-        bigtableDataClient.readRowAsync(tableId,
-            UUIDUtil.uuidToByteString(sessionId),
-            Filters.FILTERS.limit().cellsPerColumn(1)), executor)
-        .thenApply(row -> {
-          try {
-            final RegistrationSession registrationSession = extractSession(row);
+    try {
+      final Row row = bigtableDataClient.readRow(tableId,
+          UUIDUtil.uuidToByteString(sessionId),
+          Filters.FILTERS.limit().cellsPerColumn(1));
 
-            if (Instant.ofEpochMilli(registrationSession.getExpirationEpochMillis()).isBefore(clock.instant())) {
-              throw CompletionExceptions.wrap(new SessionNotFoundException());
-            }
+      final RegistrationSession registrationSession = extractSession(row);
 
-            return registrationSession;
-          } catch (final SessionNotFoundException e) {
-            throw CompletionExceptions.wrap(e);
-          }
-        })
-        .whenComplete((ignored, throwable) -> sample.stop(getSessionTimer));
+      if (Instant.ofEpochMilli(registrationSession.getExpirationEpochMillis()).isBefore(clock.instant())) {
+        throw new SessionNotFoundException();
+      }
+
+      return registrationSession;
+    } finally {
+      sample.stop(getSessionTimer);
+    }
   }
 
   @Override
-  public CompletableFuture<RegistrationSession> updateSession(final UUID sessionId,
-      final Function<RegistrationSession, CompletionStage<RegistrationSession>> sessionUpdater) {
+  public RegistrationSession updateSession(final UUID sessionId,
+      final Function<RegistrationSession, RegistrationSession> sessionUpdater) throws SessionNotFoundException {
 
     final Timer.Sample sample = Timer.start();
 
-    return updateSession(sessionId, sessionUpdater, MAX_UPDATE_RETRIES)
-        .whenComplete((ignored, throwable) -> sample.stop(updateSessionTimer));
-  }
+    try {
+      for (int attempt = 0; attempt < MAX_UPDATE_ATTEMPTS; attempt++) {
+        final RegistrationSession originalSession = getSession(sessionId);
+        final RegistrationSession updatedSession = sessionUpdater.apply(originalSession);
+        final Instant expiration = Instant.ofEpochMilli(updatedSession.getExpirationEpochMillis());
 
-  @VisibleForTesting
-  CompletableFuture<RegistrationSession> updateSession(final UUID sessionId,
-      final Function<RegistrationSession, CompletionStage<RegistrationSession>> sessionUpdater,
-      final int remainingRetries) {
+        final boolean success = bigtableDataClient.checkAndMutateRow(
+            ConditionalRowMutation.create(tableId, UUIDUtil.uuidToByteString(sessionId))
+                .condition(Filters.FILTERS.chain()
+                    .filter(Filters.FILTERS.family().exactMatch(columnFamilyName))
+                    .filter(Filters.FILTERS.qualifier().exactMatch(DATA_COLUMN_NAME))
+                    .filter(Filters.FILTERS.value().exactMatch(originalSession.toByteString())))
+                .then(Mutation.create()
+                    .setCell(columnFamilyName, DATA_COLUMN_NAME, updatedSession.toByteString())
+                    .setCell(columnFamilyName, REMOVAL_COLUMN_NAME, instantToByteString(expiration.plus(REMOVAL_TTL_PADDING)))));
 
-    return getSession(sessionId)
-        .thenCompose(session -> sessionUpdater.apply(session).thenCompose(updatedSession -> {
-          final Instant expiration = Instant.ofEpochMilli(updatedSession.getExpirationEpochMillis());
+        if (success) {
+          return updatedSession;
+        }
+      }
 
-          return GoogleApiUtil.toCompletableFuture(bigtableDataClient.checkAndMutateRowAsync(
-                      ConditionalRowMutation.create(tableId, UUIDUtil.uuidToByteString(sessionId))
-                          .condition(Filters.FILTERS.chain()
-                              .filter(Filters.FILTERS.family().exactMatch(columnFamilyName))
-                              .filter(Filters.FILTERS.qualifier().exactMatch(DATA_COLUMN_NAME))
-                              .filter(Filters.FILTERS.value().exactMatch(session.toByteString())))
-                          .then(Mutation.create()
-                              .setCell(columnFamilyName, DATA_COLUMN_NAME, updatedSession.toByteString())
-                              .setCell(columnFamilyName, REMOVAL_COLUMN_NAME, instantToByteString(expiration.plus(REMOVAL_TTL_PADDING))))),
-                  executor)
-              .thenCompose(success -> {
-                if (success) {
-                  return CompletableFuture.completedFuture(updatedSession);
-                } else {
-                  if (remainingRetries > 0) {
-                    return updateSession(sessionId, sessionUpdater, remainingRetries - 1);
-                  } else {
-                    return CompletableFuture.failedFuture(new RuntimeException("Retries exhausted when updating session"));
-                  }
-                }
-              });
-        }));
+      throw new RuntimeException("Retries exhausted when updating session");
+    } finally {
+      sample.stop(updateSessionTimer);
+    }
   }
 
   private RegistrationSession extractSession(@Nullable final Row row) throws SessionNotFoundException {

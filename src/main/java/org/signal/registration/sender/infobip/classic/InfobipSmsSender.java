@@ -16,15 +16,14 @@ import com.infobip.model.SmsResponse;
 import com.infobip.model.SmsResponseDetails;
 import com.infobip.model.SmsTextualMessage;
 import io.micrometer.core.instrument.Timer;
-import io.micronaut.scheduling.TaskExecutors;
-import jakarta.inject.Named;
 import jakarta.inject.Singleton;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executor;
+import javax.annotation.Nullable;
 import org.apache.commons.lang3.StringUtils;
 import org.signal.registration.sender.ApiClientInstrumenter;
 import org.signal.registration.sender.AttemptData;
@@ -39,10 +38,8 @@ import org.signal.registration.sender.VerificationSmsBodyProvider;
 import org.signal.registration.sender.infobip.InfobipClassicSessionData;
 import org.signal.registration.sender.infobip.InfobipExceptions;
 import org.signal.registration.sender.infobip.InfobipSenderConfiguration;
-import org.signal.registration.util.CompletionExceptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import javax.annotation.Nullable;
 
 /**
  * Sends messages through the Infobip SMS API.
@@ -56,7 +53,6 @@ public class InfobipSmsSender implements VerificationCodeSender {
   private static final Logger logger = LoggerFactory.getLogger(InfobipSmsSender.class);
 
   private final InfobipSmsConfiguration configuration;
-  private final Executor executor;
   private final VerificationCodeGenerator verificationCodeGenerator;
   private final VerificationSmsBodyProvider verificationSmsBodyProvider;
   private final SmsApi smsApiClient;
@@ -65,7 +61,6 @@ public class InfobipSmsSender implements VerificationCodeSender {
   public static final String SENDER_NAME = "infobip-sms";
 
   public InfobipSmsSender(
-      final @Named(TaskExecutors.IO) Executor executor,
       final InfobipSmsConfiguration configuration,
       final VerificationCodeGenerator verificationCodeGenerator,
       final VerificationSmsBodyProvider verificationSmsBodyProvider,
@@ -73,7 +68,6 @@ public class InfobipSmsSender implements VerificationCodeSender {
       final ApiClientInstrumenter apiClientInstrumenter,
       final InfobipSenderConfiguration senderConfiguration) {
     this.configuration = configuration;
-    this.executor = executor;
     this.verificationCodeGenerator = verificationCodeGenerator;
     this.verificationSmsBodyProvider = verificationSmsBodyProvider;
     this.smsApiClient = smsApiClient;
@@ -105,10 +99,15 @@ public class InfobipSmsSender implements VerificationCodeSender {
   }
 
   @Override
-  public CompletableFuture<AttemptData> sendVerificationCode(final MessageTransport messageTransport,
+  public AttemptData sendVerificationCode(final MessageTransport messageTransport,
       final Phonenumber.PhoneNumber phoneNumber,
       final List<Locale.LanguageRange> languageRanges,
-      final ClientType clientType) throws UnsupportedMessageTransportException {
+      final ClientType clientType) throws SenderRejectedRequestException {
+
+    if (messageTransport != MessageTransport.SMS) {
+      throw new UnsupportedMessageTransportException();
+    }
+
     final String e164 = PhoneNumberUtil.getInstance().format(phoneNumber, PhoneNumberUtil.PhoneNumberFormat.E164);
 
     final String verificationCode = verificationCodeGenerator.generateVerificationCode();
@@ -124,30 +123,45 @@ public class InfobipSmsSender implements VerificationCodeSender {
 
     final Timer.Sample sample = Timer.start();
 
-    return CompletableFuture.supplyAsync(() -> {
-      try {
-        final SmsResponse smsResponse = smsApiClient.sendSmsMessage(smsMessageRequest).execute();
-        final String messageId = checkSenderRejectedAndExtractMessageId(smsResponse.getMessages());
+    try {
+      final SmsResponse smsResponse = smsApiClient.sendSmsMessage(smsMessageRequest).execute();
+      final String messageId = checkSenderRejectedAndExtractMessageId(smsResponse.getMessages());
 
-        return new AttemptData(Optional.of(messageId),
-            InfobipClassicSessionData.newBuilder()
-                .setVerificationCode(verificationCode)
-                .build().toByteArray());
-      } catch (ApiException e) {
-        logger.debug("Failed to send SMS message with {}, errors={}", e.getMessage(), e.details());
-        throw CompletionExceptions.wrap(InfobipExceptions.toSenderException(e));
-      } catch (SenderRejectedRequestException e) {
-        logger.debug("Failed to send SMS message with {}", e.getMessage());
-        throw CompletionExceptions.wrap(e);
-      }
-    }, this.executor)
-    .whenComplete((ignored, throwable) ->
-        apiClientInstrumenter.recordApiCallMetrics(
-            getName(),
-            "sms.create",
-            throwable == null,
-            throwable != null ? InfobipExceptions.getErrorCode(throwable) : null,
-            sample));
+      apiClientInstrumenter.recordApiCallMetrics(
+          getName(),
+          "sms.create",
+          true,
+          null,
+          sample);
+
+      return new AttemptData(Optional.of(messageId),
+          InfobipClassicSessionData.newBuilder()
+              .setVerificationCode(verificationCode)
+              .build().toByteArray());
+    } catch (final SenderRejectedRequestException | RuntimeException e) {
+      logger.debug("Failed to send SMS message with {}", e.getMessage());
+
+      apiClientInstrumenter.recordApiCallMetrics(
+          getName(),
+          "sms.create",
+          false,
+          InfobipExceptions.getErrorCode(e),
+          sample);
+
+      throw e;
+    } catch (final ApiException e) {
+      logger.debug("Failed to send SMS message with {}, errors={}", e.getMessage(), e.details());
+
+      apiClientInstrumenter.recordApiCallMetrics(
+          getName(),
+          "sms.create",
+          false,
+          InfobipExceptions.getErrorCode(e),
+          sample);
+
+      throw InfobipExceptions.toSenderRejectedException(e)
+          .orElseThrow(() -> new UncheckedIOException(new IOException(e)));
+    }
   }
 
   private static String checkSenderRejectedAndExtractMessageId(@Nullable final List<SmsResponseDetails> responseDetailsList) throws SenderRejectedRequestException {
@@ -172,13 +186,13 @@ public class InfobipSmsSender implements VerificationCodeSender {
   }
 
   @Override
-  public CompletableFuture<Boolean> checkVerificationCode(String verificationCode, byte[] senderData) {
+  public boolean checkVerificationCode(final String verificationCode, final byte[] senderData) {
     try {
       final String storedVerificationCode = InfobipClassicSessionData.parseFrom(senderData).getVerificationCode();
-      return CompletableFuture.completedFuture(StringUtils.equals(verificationCode, storedVerificationCode));
+      return StringUtils.equals(verificationCode, storedVerificationCode);
     } catch (final InvalidProtocolBufferException e) {
       logger.error("Failed to parse stored session data", e);
-      return CompletableFuture.failedFuture(e);
+      throw new UncheckedIOException(e);
     }
   }
 }

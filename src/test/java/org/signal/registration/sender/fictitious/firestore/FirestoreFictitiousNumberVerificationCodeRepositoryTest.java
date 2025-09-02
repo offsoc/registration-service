@@ -11,7 +11,6 @@ import com.google.cloud.NoCredentials;
 import com.google.cloud.firestore.DocumentSnapshot;
 import com.google.cloud.firestore.Firestore;
 import com.google.cloud.firestore.FirestoreOptions;
-import com.google.common.util.concurrent.MoreExecutors;
 import com.google.i18n.phonenumbers.PhoneNumberUtil;
 import com.google.i18n.phonenumbers.Phonenumber;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -65,7 +64,6 @@ class FirestoreFictitiousNumberVerificationCodeRepositoryTest {
         .getService();
 
     repository = new FirestoreFictitiousNumberVerificationCodeRepository(firestore,
-        MoreExecutors.directExecutor(),
         configuration,
         Clock.fixed(CURRENT_TIME, ZoneId.systemDefault()),
         new SimpleMeterRegistry());
@@ -77,7 +75,7 @@ class FirestoreFictitiousNumberVerificationCodeRepositoryTest {
     final String verificationCode = "765432";
     final Duration ttl = Duration.ofMinutes(17);
 
-    repository.storeVerificationCode(phoneNumber, verificationCode, ttl).join();
+    repository.storeVerificationCode(phoneNumber, verificationCode, ttl);
 
     final DocumentSnapshot documentSnapshot = firestore.collection(COLLECTION_NAME)
         .document(PhoneNumberUtil.getInstance().format(phoneNumber, PhoneNumberUtil.PhoneNumberFormat.E164))

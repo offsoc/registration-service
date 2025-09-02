@@ -21,21 +21,21 @@ import com.messagebird.exceptions.UnauthorizedException;
 import com.messagebird.objects.MessageResponse;
 import com.messagebird.objects.VoiceMessage;
 import com.messagebird.objects.VoiceMessageResponse;
+import java.io.UncheckedIOException;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
-import java.util.concurrent.CompletionException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.signal.registration.sender.ApiClientInstrumenter;
 import org.signal.registration.sender.AttemptData;
 import org.signal.registration.sender.ClientType;
 import org.signal.registration.sender.MessageTransport;
+import org.signal.registration.sender.SenderRejectedRequestException;
 import org.signal.registration.sender.VerificationCodeGenerator;
 import org.signal.registration.sender.messagebird.MessageBirdSenderConfiguration;
-import org.signal.registration.util.CompletionExceptions;
 
 public class MessageBirdVoiceSenderTest {
 
@@ -60,7 +60,7 @@ public class MessageBirdVoiceSenderTest {
     client = mock(MessageBirdClient.class);
     bodyProvider = mock(MessageBirdVoiceTTSBodyProvider.class);
 
-    sender = new MessageBirdVoiceSender(Runnable::run, config, codeGenerator, bodyProvider, client,
+    sender = new MessageBirdVoiceSender(config, codeGenerator, bodyProvider, client,
         mock(ApiClientInstrumenter.class),
         new MessageBirdSenderConfiguration("test",
             Collections.emptyMap()));
@@ -83,14 +83,15 @@ public class MessageBirdVoiceSenderTest {
     when(codeGenerator.generateVerificationCode()).thenReturn("123456");
     when(bodyProvider.supportsLanguage(any())).thenReturn(true);
     when(bodyProvider.getVerificationBody(any(), any(), any(), any())).thenReturn("body");
-    final Throwable error = CompletionExceptions.unwrap(assertThrows(CompletionException.class, () -> sender
-        .sendVerificationCode(MessageTransport.VOICE, NUMBER, EN, ClientType.IOS)
-        .join()));
-    assertInstanceOf(GeneralException.class, error);
+    final UncheckedIOException ioException = assertThrows(UncheckedIOException.class,
+        () -> sender.sendVerificationCode(MessageTransport.VOICE, NUMBER, EN, ClientType.IOS));
+
+    assertInstanceOf(GeneralException.class, ioException.getCause().getCause());
   }
 
   @Test
-  public void sendAndVerify() throws GeneralException, UnauthorizedException {
+  public void sendAndVerify()
+      throws GeneralException, UnauthorizedException, SenderRejectedRequestException {
     when(codeGenerator.generateVerificationCode()).thenReturn("123456");
     when(bodyProvider.getVerificationBody(NUMBER, ClientType.IOS, "123456", EN))
         .thenReturn("body");
@@ -105,10 +106,9 @@ public class MessageBirdVoiceSenderTest {
         .thenReturn(response);
 
     AttemptData result = sender
-        .sendVerificationCode(MessageTransport.VOICE, NUMBER, EN, ClientType.IOS)
-        .join();
-    assertFalse(sender.checkVerificationCode("1234567", result.senderData()).join());
-    assertTrue(sender.checkVerificationCode("123456", result.senderData()).join());
+        .sendVerificationCode(MessageTransport.VOICE, NUMBER, EN, ClientType.IOS);
+    assertFalse(sender.checkVerificationCode("1234567", result.senderData()));
+    assertTrue(sender.checkVerificationCode("123456", result.senderData()));
   }
 
 }

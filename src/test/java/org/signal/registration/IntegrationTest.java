@@ -27,7 +27,6 @@ import jakarta.inject.Named;
 import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
 import org.apache.commons.lang3.tuple.Pair;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -47,6 +46,7 @@ import org.signal.registration.rpc.SendVerificationCodeRequest;
 import org.signal.registration.rpc.SendVerificationCodeResponse;
 import org.signal.registration.sender.AttemptData;
 import org.signal.registration.sender.LastDigitsOfPhoneNumberVerificationCodeSender;
+import org.signal.registration.sender.SenderRejectedRequestException;
 import org.signal.registration.sender.SenderRejectedTransportException;
 import org.signal.registration.sender.SenderSelectionStrategy;
 import org.signal.registration.sender.VerificationCodeSender;
@@ -83,11 +83,6 @@ public class IntegrationTest {
 
   @BeforeEach
   void setUp() {
-    when(sessionCreationRateLimiter.checkRateLimit(any())).thenReturn(CompletableFuture.completedFuture(null));
-    when(sendSmsVerificationCodePerNumberRateLimiter.checkRateLimit(any())).thenReturn(CompletableFuture.completedFuture(null));
-    when(sendVoiceVerificationCodePerNumberRateLimiter.checkRateLimit(any())).thenReturn(CompletableFuture.completedFuture(null));
-    when(checkVerificationCodePerNumberRateLimiter.checkRateLimit(any())).thenReturn(CompletableFuture.completedFuture(null));
-
     when(senderSelectionStrategy.chooseVerificationCodeSender(any(), any(), any(), any(), any(), any()))
         .thenReturn(new SenderSelectionStrategy.SenderSelection(
             new LastDigitsOfPhoneNumberVerificationCodeSender(),
@@ -151,11 +146,11 @@ public class IntegrationTest {
   }
 
   @Test
-  void registerTransportNotAllowed() {
+  void registerTransportNotAllowed() throws SenderRejectedRequestException {
     final VerificationCodeSender smsNotSupportedSender = mock(VerificationCodeSender.class);
 
     when(smsNotSupportedSender.sendVerificationCode(eq(org.signal.registration.sender.MessageTransport.SMS), any(), any(), any()))
-        .thenReturn(CompletableFuture.failedFuture(new SenderRejectedTransportException(new RuntimeException())));
+        .thenThrow(new SenderRejectedTransportException(new RuntimeException()));
 
     when(smsNotSupportedSender.sendVerificationCode(eq(org.signal.registration.sender.MessageTransport.VOICE), any(), any(), any()))
         .thenAnswer(invocation -> {
@@ -163,7 +158,7 @@ public class IntegrationTest {
           final byte[] senderData =
               LastDigitsOfPhoneNumberVerificationCodeSender.getVerificationCode(phoneNumber).getBytes(StandardCharsets.UTF_8);
 
-          return CompletableFuture.completedFuture(new AttemptData(Optional.empty(), senderData));
+          return new AttemptData(Optional.empty(), senderData);
         });
 
     when(smsNotSupportedSender.getName()).thenReturn("sms-not-supported");

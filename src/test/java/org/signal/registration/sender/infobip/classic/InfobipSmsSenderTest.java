@@ -1,6 +1,5 @@
 package org.signal.registration.sender.infobip.classic;
 
-import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -13,11 +12,11 @@ import com.infobip.api.SmsApi;
 import com.infobip.model.MessageStatus;
 import com.infobip.model.SmsResponse;
 import com.infobip.model.SmsResponseDetails;
+import java.io.UncheckedIOException;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
-import java.util.concurrent.CompletionException;
 import org.apache.commons.lang3.RandomStringUtils;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -25,6 +24,7 @@ import org.signal.registration.sender.ApiClientInstrumenter;
 import org.signal.registration.sender.ClientType;
 import org.signal.registration.sender.MessageTransport;
 import org.signal.registration.sender.SenderFraudBlockException;
+import org.signal.registration.sender.SenderRejectedRequestException;
 import org.signal.registration.sender.VerificationCodeGenerator;
 import org.signal.registration.sender.VerificationSmsBodyProvider;
 import org.signal.registration.sender.infobip.InfobipSenderConfiguration;
@@ -43,7 +43,7 @@ public class InfobipSmsSenderTest {
 
     when(bodyProvider.getVerificationBody(any(), any(), any(), any())).thenReturn("body");
 
-    sender = new InfobipSmsSender(Runnable::run, config, codeGenerator, bodyProvider, client, mock(
+    sender = new InfobipSmsSender(config, codeGenerator, bodyProvider, client, mock(
         ApiClientInstrumenter.class), new InfobipSenderConfiguration("test", Collections.emptyMap()));
   }
 
@@ -55,14 +55,14 @@ public class InfobipSmsSenderTest {
     when(client.sendSmsMessage(any())).thenReturn(messageRequest);
     when(messageRequest.execute()).thenThrow(ApiException.builder().build());
 
-    assertThrows(CompletionException.class, () -> sender.sendVerificationCode(MessageTransport.SMS,
+    assertThrows(UncheckedIOException.class, () -> sender.sendVerificationCode(MessageTransport.SMS,
         PhoneNumberUtil.getInstance().getExampleNumber("US"),
         Locale.LanguageRange.parse("en"),
-        ClientType.IOS).join());
+        ClientType.IOS));
   }
 
   @Test
-  void sendAndVerify() throws ApiException {
+  void sendAndVerify() throws ApiException, SenderRejectedRequestException {
     final SmsApi.SendSmsMessageRequest messageRequest = mock(SmsApi.SendSmsMessageRequest.class);
     final SmsResponse response = mock(SmsResponse.class);
     final SmsResponseDetails details = mock(SmsResponseDetails.class);
@@ -79,10 +79,9 @@ public class InfobipSmsSenderTest {
     final byte[] senderData = sender.sendVerificationCode(MessageTransport.SMS,
             PhoneNumberUtil.getInstance().getExampleNumber("US"),
             Locale.LanguageRange.parse("en"), ClientType.IOS)
-        .join()
         .senderData();
 
-    assertTrue(sender.checkVerificationCode("123456", senderData).join());
+    assertTrue(sender.checkVerificationCode("123456", senderData));
   }
 
   @Test
@@ -97,15 +96,12 @@ public class InfobipSmsSenderTest {
     when(messageRequest.execute()).thenReturn(response);
     when(response.getMessages()).thenReturn(List.of(details));
     when(details.getStatus()).thenReturn(status);
-    when(details.getMessageId()).thenReturn(RandomStringUtils.randomNumeric(22));
+    when(details.getMessageId()).thenReturn(RandomStringUtils.insecure().nextNumeric(22));
     when(status.getId()).thenReturn(87);
 
-    final CompletionException completionException = assertThrows(CompletionException.class,
+    assertThrows(SenderFraudBlockException.class,
         () -> sender.sendVerificationCode(MessageTransport.SMS,
             PhoneNumberUtil.getInstance().getExampleNumber("US"),
-            Locale.LanguageRange.parse("en"), ClientType.UNKNOWN)
-        .join());
-
-    assertInstanceOf(SenderFraudBlockException.class, completionException.getCause());
+            Locale.LanguageRange.parse("en"), ClientType.UNKNOWN));
   }
 }

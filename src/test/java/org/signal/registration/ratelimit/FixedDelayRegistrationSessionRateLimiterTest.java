@@ -8,7 +8,6 @@ package org.signal.registration.ratelimit;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.fail;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -17,7 +16,6 @@ import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.CompletionException;
 import java.util.stream.Stream;
 import javax.annotation.Nullable;
 import org.junit.jupiter.api.BeforeEach;
@@ -25,7 +23,6 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.signal.registration.session.RegistrationSession;
-import org.signal.registration.util.CompletionExceptions;
 
 class FixedDelayRegistrationSessionRateLimiterTest {
 
@@ -78,7 +75,7 @@ class FixedDelayRegistrationSessionRateLimiterTest {
         .setCreatedEpochMillis(sessionCreation.toEpochMilli())
         .build();
 
-    assertEquals(Optional.ofNullable(expectedTimeOfNextAction), rateLimiter.getTimeOfNextAction(session).join());
+    assertEquals(Optional.ofNullable(expectedTimeOfNextAction), rateLimiter.getTimeOfNextAction(session));
   }
 
   @ParameterizedTest
@@ -98,18 +95,14 @@ class FixedDelayRegistrationSessionRateLimiterTest {
         .build();
 
     if (expectedTimeOfNextAction != null && !expectedTimeOfNextAction.isAfter(currentTime)) {
-      assertDoesNotThrow(() -> rateLimiter.checkRateLimit(session).join());
+      assertDoesNotThrow(() -> rateLimiter.checkRateLimit(session));
     } else {
-      final CompletionException completionException = assertThrows(CompletionException.class,
-          () -> rateLimiter.checkRateLimit(session).join());
+      final RateLimitExceededException rateLimitExceededException = assertThrows(RateLimitExceededException.class,
+          () -> rateLimiter.checkRateLimit(session));
 
-      if (CompletionExceptions.unwrap(completionException) instanceof final RateLimitExceededException rateLimitExceededException) {
-        assertEquals(
-            Optional.ofNullable(expectedTimeOfNextAction).map(timeOfNextAction -> Duration.between(currentTime, timeOfNextAction)),
-            rateLimitExceededException.getRetryAfterDuration());
-      } else {
-        fail("Expected RateLimitExceededException");
-      }
+      assertEquals(
+          Optional.ofNullable(expectedTimeOfNextAction).map(timeOfNextAction -> Duration.between(currentTime, timeOfNextAction)),
+          rateLimitExceededException.getRetryAfterDuration());
     }
   }
 
@@ -134,7 +127,7 @@ class FixedDelayRegistrationSessionRateLimiterTest {
         Arguments.of(1, currentTime.minusSeconds(30), currentTime, currentTime, delays, currentTime.plus(Duration.ofSeconds(30))),
 
         // One prior attempt with fully-elapsed delay; action should be allowed immediately
-        Arguments.of(1, currentTime.minusSeconds(120), currentTime, currentTime.minusSeconds(120), delays, currentTime.minusSeconds(120).plus(delays.get(0))),
+        Arguments.of(1, currentTime.minusSeconds(120), currentTime, currentTime.minusSeconds(120), delays, currentTime.minusSeconds(120).plus(delays.getFirst())),
 
         // "Untouched" session created in the past
         Arguments.of(0, null, currentTime, currentTime.minusSeconds(77), delays, currentTime.minusSeconds(77))

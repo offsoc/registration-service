@@ -9,7 +9,6 @@ import com.google.i18n.phonenumbers.Phonenumber;
 import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
-import java.util.concurrent.CompletableFuture;
 
 /**
  * A verification code sender is responsible for sending verification codes to phone numbers and later verifying codes
@@ -63,26 +62,24 @@ public interface VerificationCodeSender {
       List<Locale.LanguageRange> languageRanges);
 
   /**
-   * Asynchronously sends a verification code to the given phone number with the given preferred languages. The future
-   * returned by this method yields an opaque string to be stored as part of the registration session that triggered
-   * this request to send a verification code; later, the same string will be provided to the
-   * {@link #checkVerificationCode(String, byte[])} method when called in the context of the same registration
-   * session.
+   * Sends a verification code to the given phone number with the given preferred languages. This method returns an
+   * opaque string to be stored as part of the registration session that triggered this request to send a verification
+   * code; later, the same string will be provided to the {@link #checkVerificationCode(String, byte[])} method when
+   * called in the context of the same registration session.
    *
    * @param messageTransport the transport via which to send a verification code
    * @param phoneNumber      the phone number to which to send a verification code
    * @param languageRanges   the preferred languages in which to send verification codes
    * @param clientType       the type of client receiving the verification code
    *
-   * @return a future that yields attempt data (to be provided to the {@link #checkVerificationCode(String, byte[])}
-   * method later) once the verification code has been sent
+   * @return attempt data to be provided to the {@link #checkVerificationCode(String, byte[])} method later
    *
-   * @throws UnsupportedMessageTransportException if the sender does not support the given message transport
+   * @throws SenderRejectedRequestException if the sender received, but affirmatively rejected, the request
    */
-  CompletableFuture<AttemptData> sendVerificationCode(MessageTransport messageTransport,
-                                                      Phonenumber.PhoneNumber phoneNumber,
-                                                      List<Locale.LanguageRange> languageRanges,
-                                                      ClientType clientType) throws UnsupportedMessageTransportException;
+  AttemptData sendVerificationCode(MessageTransport messageTransport,
+      Phonenumber.PhoneNumber phoneNumber,
+      List<Locale.LanguageRange> languageRanges,
+      ClientType clientType) throws SenderRejectedRequestException;
 
   /**
    * Checks whether the verification code provided by a client matches the verification code sent via an earlier call to
@@ -93,8 +90,10 @@ public interface VerificationCodeSender {
    *                   {@link #sendVerificationCode(MessageTransport, Phonenumber.PhoneNumber, List, ClientType)}
    *                   earlier in this registration session
    *
-   * @return a future that yields {@code true} if the provided {@code verificationCode} matches the expected
-   * verification code associated with this session
+   * @return {@code true} if the provided {@code verificationCode} matches the expected verification code associated
+   * with this session
+   *
+   * @throws SenderRejectedRequestException if the sender received, but affirmatively rejected, the request
    */
-  CompletableFuture<Boolean> checkVerificationCode(String verificationCode, byte[] senderData);
+  boolean checkVerificationCode(String verificationCode, byte[] senderData) throws SenderRejectedRequestException;
 }

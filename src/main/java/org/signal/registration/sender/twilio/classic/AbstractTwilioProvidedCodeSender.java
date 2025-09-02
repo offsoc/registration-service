@@ -9,8 +9,8 @@ import com.google.i18n.phonenumbers.PhoneNumberUtil;
 import com.google.i18n.phonenumbers.Phonenumber;
 import com.google.protobuf.InvalidProtocolBufferException;
 import com.twilio.type.PhoneNumber;
+import java.io.UncheckedIOException;
 import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
 import org.apache.commons.lang3.StringUtils;
 import org.signal.registration.sender.AttemptData;
 import org.signal.registration.sender.VerificationCodeSender;
@@ -37,13 +37,13 @@ abstract class AbstractTwilioProvidedCodeSender implements VerificationCodeSende
   }
 
   @Override
-  public CompletableFuture<Boolean> checkVerificationCode(final String verificationCode, final byte[] senderData) {
+  public boolean checkVerificationCode(final String verificationCode, final byte[] senderData) {
     try {
-      return CompletableFuture.completedFuture(StringUtils.equals(verificationCode,
-              TwilioProvidedCodeSessionData.parseFrom(senderData).getVerificationCode()));
+      return StringUtils.equals(verificationCode,
+          TwilioProvidedCodeSessionData.parseFrom(senderData).getVerificationCode());
     } catch (final InvalidProtocolBufferException e) {
       logger.error("Failed to parse stored session data", e);
-      return CompletableFuture.failedFuture(e);
+      throw new UncheckedIOException(e);
     }
   }
 }

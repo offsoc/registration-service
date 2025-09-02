@@ -25,9 +25,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import javax.annotation.Nullable;
@@ -40,6 +37,7 @@ import org.signal.registration.sender.AttemptData;
 import org.signal.registration.sender.ClientType;
 import org.signal.registration.sender.MessageTransport;
 import org.signal.registration.sender.SenderFraudBlockException;
+import org.signal.registration.sender.SenderRateLimitedRequestException;
 import org.signal.registration.sender.SenderRejectedRequestException;
 import org.signal.registration.sender.SenderRejectedTransportException;
 import org.signal.registration.sender.SenderSelectionStrategy;
@@ -49,12 +47,11 @@ import org.signal.registration.session.FailedSendReason;
 import org.signal.registration.session.RegistrationAttempt;
 import org.signal.registration.session.RegistrationSession;
 import org.signal.registration.session.SessionMetadata;
+import org.signal.registration.session.SessionNotFoundException;
 import org.signal.registration.session.SessionRepository;
 import org.signal.registration.util.ClientTypes;
-import org.signal.registration.util.CompletionExceptions;
 import org.signal.registration.util.MessageTransports;
 import org.signal.registration.util.UUIDUtil;
-import reactor.core.publisher.Mono;
 
 /**
  * The registration service is the core orchestrator of registration business logic and manages registration sessions
@@ -83,7 +80,10 @@ public class RegistrationService {
   @VisibleForTesting
   record NextActionTimes(Optional<Instant> nextSms,
                          Optional<Instant> nextVoiceCall,
-                         Optional<Instant> nextCodeCheck) {}
+                         Optional<Instant> nextCodeCheck) {
+
+    static NextActionTimes EMPTY = new NextActionTimes(Optional.empty(), Optional.empty(), Optional.empty());
+  }
 
   /**
    * Constructs a new registration service that chooses verification code senders with the given strategy and stores
@@ -141,16 +141,17 @@ public class RegistrationService {
    *
    * @param phoneNumber the phone number for which to create a new registration session
    *
-   * @return a future that yields the newly-created registration session once the session has been created and stored in
-   * this service's session repository; the returned future may fail with a
-   * {@link org.signal.registration.ratelimit.RateLimitExceededException}
+   * @return the newly-created registration session
+   *
+   * @throws RateLimitExceededException if the caller must wait before creating another session for the given phone
+   * number
    */
-  public CompletableFuture<RegistrationSession> createRegistrationSession(final Phonenumber.PhoneNumber phoneNumber,
-      final String rateLimitCollationKey, final SessionMetadata sessionMetadata) {
+  public RegistrationSession createRegistrationSession(final Phonenumber.PhoneNumber phoneNumber,
+      final String rateLimitCollationKey,
+      final SessionMetadata sessionMetadata) throws RateLimitExceededException {
 
-    return sessionCreationRateLimiter.checkRateLimit(Pair.of(phoneNumber, rateLimitCollationKey))
-        .thenCompose(ignored ->
-            sessionRepository.createSession(phoneNumber, sessionMetadata, clock.instant().plus(SESSION_TTL_AFTER_LAST_ACTION)));
+    sessionCreationRateLimiter.checkRateLimit(Pair.of(phoneNumber, rateLimitCollationKey));
+    return sessionRepository.createSession(phoneNumber, sessionMetadata, clock.instant().plus(SESSION_TTL_AFTER_LAST_ACTION));
   }
 
   /**
@@ -158,10 +159,11 @@ public class RegistrationService {
    *
    * @param sessionId the unique identifier for the session to retrieve
    *
-   * @return a future that yields the identified session when complete; the returned future may fail with a
-   * {@link org.signal.registration.session.SessionNotFoundException}
+   * @return the identified session when complete
+   *
+   * @throws SessionNotFoundException if no session was found for the given identifier
    */
-  public CompletableFuture<RegistrationSession> getRegistrationSession(final UUID sessionId) {
+  public RegistrationSession getRegistrationSession(final UUID sessionId) throws SessionNotFoundException {
     return sessionRepository.getSession(sessionId);
   }
 
@@ -175,117 +177,125 @@ public class RegistrationService {
    * @param languageRanges a prioritized list of languages in which to send the verification code
    * @param clientType the type of client receiving the verification code
    *
-   * @return a future that yields the updated registration session when the verification code has been sent and updates
-   * to the session have been stored
+   * @return the updated registration session
+   *
+   * @throws SessionNotFoundException if no session was found for the given identifier
+   * @throws SessionAlreadyVerifiedException if the session is already verified
+   * @throws TransportNotAllowedException if the selected sender does not support the given `messageTransport`
+   * @throws RateLimitExceededException if the caller must wait before requesting another verification code
+   * @throws SenderRejectedRequestException if the sender received but rejected the request to send a verification code
+   * for any reason
    */
-  public CompletableFuture<RegistrationSession> sendVerificationCode(final MessageTransport messageTransport,
+  public RegistrationSession sendVerificationCode(final MessageTransport messageTransport,
       final UUID sessionId,
       @Nullable final String senderName,
       final List<Locale.LanguageRange> languageRanges,
-      final ClientType clientType) {
+      final ClientType clientType)
+      throws TransportNotAllowedException, SessionAlreadyVerifiedException, SessionNotFoundException, RateLimitExceededException, SenderRejectedRequestException {
 
     final RateLimiter<RegistrationSession> sessionRateLimiter = switch (messageTransport) {
       case SMS -> sendSmsVerificationCodePerSessionRateLimiter;
       case VOICE -> sendVoiceVerificationCodePerSessionRateLimiter;
     };
+
     final RateLimiter<Phonenumber.PhoneNumber> numberRateLimiter = switch (messageTransport) {
       case SMS -> sendSmsVerificationCodePerNumberRateLimiter;
       case VOICE -> sendVoiceVerificationCodePerNumberRateLimiter;
     };
 
-    return sessionRepository.getSession(sessionId)
-        .thenCompose(session -> {
-          if (StringUtils.isNotBlank(session.getVerifiedCode())) {
-            return CompletableFuture.failedFuture(new SessionAlreadyVerifiedException(session));
-          }
+    final RegistrationSession session = sessionRepository.getSession(sessionId);
 
-          return sessionRateLimiter.checkRateLimit(session)
-              .thenCompose(ignored -> numberRateLimiter.checkRateLimit(getPhoneNumberFromSession(session))
-                  .exceptionallyCompose(addSessionToRateLimitExceededExceptionIfNecessary(session)))
-              .thenApply(ignored -> session);
-        })
-        .thenCompose(session -> {
+    if (StringUtils.isNotBlank(session.getVerifiedCode())) {
+      throw new SessionAlreadyVerifiedException(session);
+    }
 
-          final Set<String> previouslyFailedSenders = session.getRegistrationAttemptsList()
-              .stream()
-              .map(RegistrationAttempt::getSenderName)
-              .collect(Collectors.toSet());
+    sessionRateLimiter.checkRateLimit(session);
 
-          // Add senders from failed attempts with a "provider unavailable" error
-          session.getFailedAttemptsList()
-              .stream()
-              .filter(attempt -> attempt.getFailedSendReason() == FailedSendReason.FAILED_SEND_REASON_UNAVAILABLE)
-              .map(FailedSendAttempt::getSenderName)
-              .forEach(previouslyFailedSenders::add);
+    try {
+      numberRateLimiter.checkRateLimit(getPhoneNumberFromSession(session));
+    } catch (final RateLimitExceededException e) {
+      // In general, leaky-bucket rate limiters don't know about registration sessions, so we need to add the session
+      // on our own
+      e.setRegistrationSession(session);
+      throw e;
+    }
 
-          final Phonenumber.PhoneNumber phoneNumberFromSession = getPhoneNumberFromSession(session);
-          final SenderSelection selection = senderSelectionStrategy.chooseVerificationCodeSender(
-              messageTransport, phoneNumberFromSession, languageRanges, clientType, senderName,
-              previouslyFailedSenders);
+    final Set<String> previouslyFailedSenders = session.getRegistrationAttemptsList()
+        .stream()
+        .map(RegistrationAttempt::getSenderName)
+        .collect(Collectors.toSet());
 
-          return selection.sender()
-              .sendVerificationCode(messageTransport, phoneNumberFromSession, languageRanges, clientType)
-              .thenCompose(attemptData -> sessionRepository.updateSession(sessionId, sessionToUpdate -> {
-                final RegistrationSession.Builder builder = sessionToUpdate.toBuilder()
-                    .setCheckCodeAttempts(0)
-                    .setLastCheckCodeAttemptEpochMillis(0)
-                    .addRegistrationAttempts(buildRegistrationAttempt(selection,
-                        messageTransport,
-                        clientType,
-                        attemptData,
-                        selection.sender().getAttemptTtl()));
+    // Add senders from failed attempts with a "provider unavailable" error
+    session.getFailedAttemptsList()
+        .stream()
+        .filter(attempt -> attempt.getFailedSendReason() == FailedSendReason.FAILED_SEND_REASON_UNAVAILABLE)
+        .map(FailedSendAttempt::getSenderName)
+        .forEach(previouslyFailedSenders::add);
 
-                return getSessionExpiration(builder.build())
-                    .thenApply(expiration -> builder.setExpirationEpochMillis(expiration.toEpochMilli()).build());
-              }))
-              .exceptionallyCompose(throwable -> {
-                final Throwable unwrapped = CompletionExceptions.unwrap(throwable);
-                if (unwrapped instanceof SenderRejectedTransportException e) {
-                  return sessionRepository.updateSession(sessionId, sessionToUpdate -> {
-                        final RegistrationSession.Builder builder = sessionToUpdate.toBuilder()
-                            .setCheckCodeAttempts(0)
-                            .setLastCheckCodeAttemptEpochMillis(0)
-                            .addRejectedTransports(
-                                MessageTransports.getRpcMessageTransportFromSenderTransport(messageTransport));
+    final Phonenumber.PhoneNumber phoneNumberFromSession = getPhoneNumberFromSession(session);
+    final SenderSelection selection = senderSelectionStrategy.chooseVerificationCodeSender(
+        messageTransport, phoneNumberFromSession, languageRanges, clientType, senderName,
+        previouslyFailedSenders);
 
-                        return getSessionExpiration(builder.build())
-                            .thenApply(expiration -> builder.setExpirationEpochMillis(expiration.toEpochMilli()).build());
-                      })
-                      .thenApply(updatedSession -> {
-                        throw CompletionExceptions.wrap(new TransportNotAllowedException(e, updatedSession));
-                      });
-                }
+    try {
+      final AttemptData attemptData = selection.sender()
+          .sendVerificationCode(messageTransport, phoneNumberFromSession, languageRanges, clientType);
 
-                final FailedSendReason failedSendReason;
-                if (unwrapped instanceof SenderFraudBlockException) {
-                  failedSendReason = FailedSendReason.FAILED_SEND_REASON_SUSPECTED_FRAUD;
-                } else if (unwrapped instanceof SenderRejectedRequestException) {
-                  failedSendReason = FailedSendReason.FAILED_SEND_REASON_REJECTED;
-                } else {
-                  failedSendReason = FailedSendReason.FAILED_SEND_REASON_UNAVAILABLE;
-                }
+      return sessionRepository.updateSession(sessionId, sessionToUpdate -> {
+        final RegistrationSession.Builder builder = sessionToUpdate.toBuilder()
+            .setCheckCodeAttempts(0)
+            .setLastCheckCodeAttemptEpochMillis(0)
+            .addRegistrationAttempts(buildRegistrationAttempt(selection,
+                messageTransport,
+                clientType,
+                attemptData,
+                selection.sender().getAttemptTtl()));
 
-                return sessionRepository.updateSession(sessionId, sessionToUpdate ->
-                        CompletableFuture.completedFuture(sessionToUpdate.toBuilder()
-                            .addFailedAttempts(FailedSendAttempt.newBuilder()
-                                .setTimestampEpochMillis(clock.instant().toEpochMilli())
-                                .setSenderName(selection.sender().getName())
-                                .setSelectionReason(selection.reason().toString())
-                                .setMessageTransport(
-                                    MessageTransports.getRpcMessageTransportFromSenderTransport(messageTransport))
-                                .setClientType(ClientTypes.getRpcClientTypeFromSenderClientType(clientType))
-                                .setFailedSendReason(failedSendReason))
-                            .build()))
-                    .thenApply(updatedSession -> {
-                      if (unwrapped instanceof RateLimitExceededException e) {
-                        throw CompletionExceptions.wrap(
-                            new RateLimitExceededException(e.getRetryAfterDuration().orElse(null),
-                                e.getRegistrationSession().orElse(updatedSession)));
-                      }
-                      throw CompletionExceptions.wrap(throwable);
-                    });
-              });
-        });
+        final Instant expiration = getSessionExpiration(builder.build());
+
+        return builder
+            .setExpirationEpochMillis(expiration.toEpochMilli())
+            .build();
+      });
+    } catch (final SenderRateLimitedRequestException e) {
+      throw new RateLimitExceededException(e.getRetryAfter(), session);
+    } catch (final SenderRejectedTransportException e) {
+      final RegistrationSession updatedSession = sessionRepository.updateSession(sessionId, sessionToUpdate -> {
+        final RegistrationSession.Builder builder = sessionToUpdate.toBuilder()
+            .setCheckCodeAttempts(0)
+            .setLastCheckCodeAttemptEpochMillis(0)
+            .addRejectedTransports(MessageTransports.getRpcMessageTransportFromSenderTransport(messageTransport));
+
+        final Instant expiration = getSessionExpiration(builder.build());
+
+        return builder
+            .setExpirationEpochMillis(expiration.toEpochMilli())
+            .build();
+      });
+
+      throw new TransportNotAllowedException(e, updatedSession);
+    } catch (final Exception e) {
+      final FailedSendReason failedSendReason = switch (e) {
+        case SenderFraudBlockException ignored -> FailedSendReason.FAILED_SEND_REASON_SUSPECTED_FRAUD;
+        case SenderRejectedRequestException ignored -> FailedSendReason.FAILED_SEND_REASON_REJECTED;
+        default -> FailedSendReason.FAILED_SEND_REASON_UNAVAILABLE;
+      };
+
+      sessionRepository.updateSession(sessionId,
+          sessionToUpdate ->
+              sessionToUpdate.toBuilder()
+                  .addFailedAttempts(FailedSendAttempt.newBuilder()
+                      .setTimestampEpochMillis(clock.instant().toEpochMilli())
+                      .setSenderName(selection.sender().getName())
+                      .setSelectionReason(selection.reason().toString())
+                      .setMessageTransport(
+                          MessageTransports.getRpcMessageTransportFromSenderTransport(messageTransport))
+                      .setClientType(ClientTypes.getRpcClientTypeFromSenderClientType(clientType))
+                      .setFailedSendReason(failedSendReason))
+                  .build());
+
+      throw e;
+    }
   }
 
   private RegistrationAttempt buildRegistrationAttempt(final SenderSelection selection,
@@ -319,63 +329,74 @@ public class RegistrationService {
    * @param sessionId an identifier for a registration session against which to check a verification code
    * @param verificationCode a client-provided verification code
    *
-   * @return a future that yields the updated registration; the session's {@code verifiedCode} field will be set if the
-   * session has been successfully verified
+   * @return the updated registration; the session's {@code verifiedCode} field will be set if the session has been
+   * successfully verified
    */
-  public CompletableFuture<RegistrationSession> checkVerificationCode(final UUID sessionId, final String verificationCode) {
-    return sessionRepository.getSession(sessionId)
-        .thenCompose(session -> {
-          // If a connection was interrupted, a caller may repeat a verification request. Check to see if we already
-          // have a known verification code for this session and, if so, check the provided code against that code
-          // instead of making a call upstream.
-          if (StringUtils.isNotBlank(session.getVerifiedCode())) {
-            return CompletableFuture.completedFuture(session);
-          } else {
-            return checkVerificationCode(session, verificationCode);
-          }
-        });
-  }
+  public RegistrationSession checkVerificationCode(final UUID sessionId, final String verificationCode)
+      throws SessionNotFoundException, NoVerificationCodeSentException, RateLimitExceededException, AttemptExpiredException {
 
-  private CompletableFuture<RegistrationSession> checkVerificationCode(final RegistrationSession session, final String verificationCode) {
-    if (session.getRegistrationAttemptsCount() == 0) {
-      return CompletableFuture.failedFuture(new NoVerificationCodeSentException(session));
-    } else {
+    final RegistrationSession session = sessionRepository.getSession(sessionId);
 
-      return checkVerificationCodePerSessionRateLimiter.checkRateLimit(session)
-          .thenCompose(ignored -> checkVerificationCodePerNumberRateLimiter.checkRateLimit(getPhoneNumberFromSession(session)))
-          .exceptionallyCompose(addSessionToRateLimitExceededExceptionIfNecessary(session))
-          .thenCompose(ignored -> {
-        final RegistrationAttempt currentRegistrationAttempt =
-            session.getRegistrationAttempts(session.getRegistrationAttemptsCount() - 1);
-
-        if (Instant.ofEpochMilli(currentRegistrationAttempt.getExpirationEpochMillis()).isBefore(clock.instant())) {
-          return CompletableFuture.failedFuture(new AttemptExpiredException());
-        }
-
-        final VerificationCodeSender sender = sendersByName.get(currentRegistrationAttempt.getSenderName());
-
-        if (sender == null) {
-          throw new IllegalArgumentException("Unrecognized sender: " + currentRegistrationAttempt.getSenderName());
-        }
-
-        return sender.checkVerificationCode(verificationCode, currentRegistrationAttempt.getSenderData().toByteArray())
-            .exceptionally(throwable -> {
-              // The sender may view the submitted code as an illegal argument or may reject the attempt to check a
-              // code altogether. We can treat any case of "the sender got it, but said 'no'" the same way we would
-              // treat an accepted-but-incorrect code.
-              if (CompletionExceptions.unwrap(throwable) instanceof SenderRejectedRequestException) {
-                return false;
-              }
-
-              throw CompletionExceptions.wrap(throwable);
-            })
-            .thenCompose(verified -> recordCheckVerificationCodeAttempt(session, verified ? verificationCode : null));
-      });
+    // If a connection was interrupted, a caller may repeat a verification request. Check to see if we already have a
+    // known verification code for this session and, if so, check the provided code against that code instead of making
+    // a call upstream.
+    if (StringUtils.isNotBlank(session.getVerifiedCode())) {
+      return session;
     }
+
+    return checkVerificationCode(session, verificationCode);
   }
 
-  private CompletableFuture<RegistrationSession> recordCheckVerificationCodeAttempt(final RegistrationSession session,
-      @Nullable final String verifiedCode) {
+  private RegistrationSession checkVerificationCode(final RegistrationSession session, final String verificationCode)
+      throws NoVerificationCodeSentException, RateLimitExceededException, SessionNotFoundException, AttemptExpiredException {
+
+    if (session.getRegistrationAttemptsCount() == 0) {
+      throw new NoVerificationCodeSentException(session);
+    }
+
+    checkVerificationCodePerSessionRateLimiter.checkRateLimit(session);
+
+    try {
+      checkVerificationCodePerNumberRateLimiter.checkRateLimit(getPhoneNumberFromSession(session));
+    } catch (final RateLimitExceededException e) {
+      // In general, leaky-bucket rate limiters don't know about registration sessions, so we need to add the session
+      // on our own
+      e.setRegistrationSession(session);
+      throw e;
+    }
+
+    final RegistrationAttempt currentRegistrationAttempt =
+        session.getRegistrationAttempts(session.getRegistrationAttemptsCount() - 1);
+
+    if (Instant.ofEpochMilli(currentRegistrationAttempt.getExpirationEpochMillis()).isBefore(clock.instant())) {
+      throw new AttemptExpiredException();
+    }
+
+    final VerificationCodeSender sender = sendersByName.get(currentRegistrationAttempt.getSenderName());
+
+    if (sender == null) {
+      throw new IllegalArgumentException("Unrecognized sender: " + currentRegistrationAttempt.getSenderName());
+    }
+
+    boolean verified;
+
+    try {
+      verified = sender.checkVerificationCode(verificationCode,
+          currentRegistrationAttempt.getSenderData().toByteArray());
+    } catch (final SenderRateLimitedRequestException e) {
+      throw new RateLimitExceededException(e.getRetryAfter(), session);
+    } catch (final SenderRejectedRequestException e) {
+      // The sender may view the submitted code as an illegal argument or may reject the attempt to check a code
+      // altogether. We can treat any case of "the sender got it, but said 'no'" the same way we would treat an
+      // accepted-but-incorrect code.
+      verified = false;
+    }
+
+    return recordCheckVerificationCodeAttempt(session, verified ? verificationCode : null);
+  }
+
+  private RegistrationSession recordCheckVerificationCodeAttempt(final RegistrationSession session,
+      @Nullable final String verifiedCode) throws SessionNotFoundException {
 
     return sessionRepository.updateSession(UUIDUtil.uuidFromByteString(session.getId()), s -> {
       final RegistrationSession.Builder builder = s.toBuilder()
@@ -386,9 +407,10 @@ public class RegistrationService {
         builder.setVerifiedCode(verifiedCode);
       }
 
-      return getSessionExpiration(builder.build()).thenApply(expiration ->
-          builder.setExpirationEpochMillis(expiration.toEpochMilli()).build()
-      );
+      final Instant expiration = getSessionExpiration(builder.build());
+
+      return builder.setExpirationEpochMillis(expiration.toEpochMilli())
+          .build();
     });
   }
 
@@ -400,144 +422,115 @@ public class RegistrationService {
    *
    * @return session metadata suitable for presentation to remote callers
    */
-  public CompletionStage<RegistrationSessionMetadata> buildSessionMetadata(final RegistrationSession session) {
-    final boolean verified = StringUtils.isNotBlank(session.getVerifiedCode());
+  public RegistrationSessionMetadata buildSessionMetadata(final RegistrationSession session) {
+    final RegistrationSessionMetadata.Builder sessionMetadataBuilder = RegistrationSessionMetadata.newBuilder()
+        .setSessionId(session.getId())
+        .setE164(Long.parseLong(StringUtils.removeStart(session.getPhoneNumber(), "+")))
+        .setVerified(StringUtils.isNotBlank(session.getVerifiedCode()))
+        .setExpirationSeconds(Duration.between(clock.instant(), getSessionExpiration(session)).getSeconds());
 
-    final CompletionStage<RegistrationSessionMetadata.Builder> sessionMetadataBuilderFuture = getSessionExpiration(session)
-        .thenApply(expiration -> RegistrationSessionMetadata.newBuilder()
-            .setSessionId(session.getId())
-            .setE164(Long.parseLong(StringUtils.removeStart(session.getPhoneNumber(), "+")))
-            .setVerified(verified)
-            .setExpirationSeconds(Duration.between(clock.instant(), expiration).getSeconds()));
-
+    final NextActionTimes nextActionTimes = getNextActionTimes(session);
     final Instant currentTime = clock.instant();
-    return getNextActionTimes(session)
-        .thenCombine(sessionMetadataBuilderFuture, (nextActionTimes, sessionMetadataBuilder) -> {
 
-          nextActionTimes.nextSms().ifPresent(nextAction -> {
-            sessionMetadataBuilder.setMayRequestSms(true);
-            sessionMetadataBuilder.setNextSmsSeconds(
-                nextAction.isBefore(currentTime) ? 0 : Duration.between(currentTime, nextAction).toSeconds());
-          });
+    nextActionTimes.nextSms().ifPresent(nextAction -> {
+      sessionMetadataBuilder.setMayRequestSms(true);
+      sessionMetadataBuilder.setNextSmsSeconds(
+          nextAction.isBefore(currentTime) ? 0 : Duration.between(currentTime, nextAction).toSeconds());
+    });
 
-          nextActionTimes.nextVoiceCall().ifPresent(nextAction -> {
-            sessionMetadataBuilder.setMayRequestVoiceCall(true);
-            sessionMetadataBuilder.setNextVoiceCallSeconds(
-                nextAction.isBefore(currentTime) ? 0 : Duration.between(currentTime, nextAction).toSeconds());
-          });
+    nextActionTimes.nextVoiceCall().ifPresent(nextAction -> {
+      sessionMetadataBuilder.setMayRequestVoiceCall(true);
+      sessionMetadataBuilder.setNextVoiceCallSeconds(
+          nextAction.isBefore(currentTime) ? 0 : Duration.between(currentTime, nextAction).toSeconds());
+    });
 
-          nextActionTimes.nextCodeCheck().ifPresent(nextAction -> {
-            sessionMetadataBuilder.setMayCheckCode(true);
-            sessionMetadataBuilder.setNextCodeCheckSeconds(
-                nextAction.isBefore(currentTime) ? 0 : Duration.between(currentTime, nextAction).toSeconds());
-          });
+    nextActionTimes.nextCodeCheck().ifPresent(nextAction -> {
+      sessionMetadataBuilder.setMayCheckCode(true);
+      sessionMetadataBuilder.setNextCodeCheckSeconds(
+          nextAction.isBefore(currentTime) ? 0 : Duration.between(currentTime, nextAction).toSeconds());
+    });
 
-          return sessionMetadataBuilder.build();
-        });
+    return sessionMetadataBuilder.build();
   }
 
   @VisibleForTesting
-  CompletionStage<Instant> getSessionExpiration(final RegistrationSession session) {
-    final CompletionStage<Instant> expiration;
-
-    if (StringUtils.isBlank(session.getVerifiedCode())) {
-      final List<Instant> candidateExpirations = new ArrayList<>(session.getRegistrationAttemptsList().stream()
-          .map(attempt -> Instant.ofEpochMilli(attempt.getExpirationEpochMillis()))
-          .toList());
-
-      expiration = getNextActionTimes(session).thenApply(nextActionTimes -> {
-        nextActionTimes.nextSms()
-            .map(nextAction -> nextAction.plus(SESSION_TTL_AFTER_LAST_ACTION))
-            .ifPresent(candidateExpirations::add);
-
-        nextActionTimes.nextVoiceCall()
-            .map(nextAction -> nextAction.plus(SESSION_TTL_AFTER_LAST_ACTION))
-            .ifPresent(candidateExpirations::add);
-
-        nextActionTimes.nextCodeCheck()
-            .map(nextAction -> nextAction.plus(SESSION_TTL_AFTER_LAST_ACTION))
-            .ifPresent(candidateExpirations::add);
-
-        // If a session never has a successful registration attempt and exhausts all SMS and voice ratelimits,
-        // fall back to the expiration set at session creation time
-        return candidateExpirations.stream().max(Comparator.naturalOrder())
-            .orElse(Instant.ofEpochMilli(session.getExpirationEpochMillis()));
-      });
-
-    } else {
+  Instant getSessionExpiration(final RegistrationSession session) {
+    if (StringUtils.isNotBlank(session.getVerifiedCode())) {
       // The session must have been verified as a result of the last check
-      expiration = CompletableFuture.completedFuture(
-          Instant.ofEpochMilli(session.getLastCheckCodeAttemptEpochMillis()).plus(SESSION_TTL_AFTER_LAST_ACTION));
+      return Instant.ofEpochMilli(session.getLastCheckCodeAttemptEpochMillis())
+          .plus(SESSION_TTL_AFTER_LAST_ACTION);
     }
 
-    return expiration;
+    final List<Instant> candidateExpirations = new ArrayList<>(session.getRegistrationAttemptsList().stream()
+        .map(attempt -> Instant.ofEpochMilli(attempt.getExpirationEpochMillis()))
+        .toList());
+
+    final NextActionTimes nextActionTimes = getNextActionTimes(session);
+
+    nextActionTimes.nextSms()
+        .map(nextAction -> nextAction.plus(SESSION_TTL_AFTER_LAST_ACTION))
+        .ifPresent(candidateExpirations::add);
+
+    nextActionTimes.nextVoiceCall()
+        .map(nextAction -> nextAction.plus(SESSION_TTL_AFTER_LAST_ACTION))
+        .ifPresent(candidateExpirations::add);
+
+    nextActionTimes.nextCodeCheck()
+        .map(nextAction -> nextAction.plus(SESSION_TTL_AFTER_LAST_ACTION))
+        .ifPresent(candidateExpirations::add);
+
+    // If a session never has a successful registration attempt and exhausts all SMS and voice ratelimits,
+    // fall back to the expiration set at session creation time
+    return candidateExpirations.stream().max(Comparator.naturalOrder())
+        .orElse(Instant.ofEpochMilli(session.getExpirationEpochMillis()));
   }
 
   @VisibleForTesting
-  CompletionStage<NextActionTimes> getNextActionTimes(final RegistrationSession session) {
-    final boolean verified = StringUtils.isNotBlank(session.getVerifiedCode());
-
-    Mono<Optional<Instant>> nextSms = Mono.just(Optional.empty());
-    Mono<Optional<Instant>> nextVoiceCall = Mono.just(Optional.empty());
-    Mono<Optional<Instant>> nextCodeCheck = Mono.just(Optional.empty());
-
+  NextActionTimes getNextActionTimes(final RegistrationSession session) {
     // If the session is already verified, callers can't request or check more verification codes
-    if (!verified) {
+    if (StringUtils.isNotBlank(session.getVerifiedCode())) {
+      return NextActionTimes.EMPTY;
+    }
 
-      // Callers can only check codes if there's an active attempt
-      if (session.getRegistrationAttemptsCount() > 0) {
-        final Instant currentAttemptExpiration = Instant.ofEpochMilli(
-            session.getRegistrationAttemptsList().get(session.getRegistrationAttemptsCount() - 1)
-                .getExpirationEpochMillis());
+    // Callers can't request more verification codes if they've exhausted their check attempts (since they can't check
+    // any new codes they might receive)
+    final Optional<Instant> nextSms = sendSmsVerificationCodePerSessionRateLimiter.getTimeOfNextAction(session);
 
-        if (!clock.instant().isAfter(currentAttemptExpiration)) {
-          nextCodeCheck = Mono.fromFuture(checkVerificationCodePerSessionRateLimiter.getTimeOfNextAction(session));
-        }
-      }
+    Optional<Instant> nextCodeCheck = Optional.empty();
 
-      // Callers can't request more verification codes if they've exhausted their check attempts (since they can't check
-      // any new codes they might receive)
-      nextSms = Mono.fromFuture(sendSmsVerificationCodePerSessionRateLimiter.getTimeOfNextAction(session));
+    // Callers can only check codes if there's an active attempt
+    if (session.getRegistrationAttemptsCount() > 0) {
+      final Instant currentAttemptExpiration = Instant.ofEpochMilli(
+          session.getRegistrationAttemptsList().get(session.getRegistrationAttemptsCount() - 1)
+              .getExpirationEpochMillis());
 
-      // Callers may not request codes via phone call until they've attempted an SMS
-      final boolean hasAttemptedSms = session.getRegistrationAttemptsList().stream().anyMatch(attempt ->
-          attempt.getMessageTransport() == org.signal.registration.rpc.MessageTransport.MESSAGE_TRANSPORT_SMS) ||
-          session.getRejectedTransportsList().contains(org.signal.registration.rpc.MessageTransport.MESSAGE_TRANSPORT_SMS) ||
-              session.getFailedAttemptsList().stream().anyMatch(attempt ->
-                  attempt.getMessageTransport() == org.signal.registration.rpc.MessageTransport.MESSAGE_TRANSPORT_SMS
-                      && attempt.getFailedSendReason() != FailedSendReason.FAILED_SEND_REASON_SUSPECTED_FRAUD);
-
-      if (hasAttemptedSms) {
-        nextVoiceCall = Mono.fromFuture(sendVoiceVerificationCodePerSessionRateLimiter.getTimeOfNextAction(session));
+      if (!clock.instant().isAfter(currentAttemptExpiration)) {
+        nextCodeCheck = checkVerificationCodePerSessionRateLimiter.getTimeOfNextAction(session);
       }
     }
 
-    return Mono.zip(nextSms, nextVoiceCall, nextCodeCheck)
-        .map(zipped -> new NextActionTimes(zipped.getT1(), zipped.getT2(), zipped.getT3()))
-        .toFuture();
+    // Callers may not request codes via phone call until they've attempted an SMS
+    final boolean hasAttemptedSms = session.getRegistrationAttemptsList().stream().anyMatch(attempt ->
+        attempt.getMessageTransport() == org.signal.registration.rpc.MessageTransport.MESSAGE_TRANSPORT_SMS) ||
+        session.getRejectedTransportsList().contains(org.signal.registration.rpc.MessageTransport.MESSAGE_TRANSPORT_SMS) ||
+            session.getFailedAttemptsList().stream().anyMatch(attempt ->
+                attempt.getMessageTransport() == org.signal.registration.rpc.MessageTransport.MESSAGE_TRANSPORT_SMS
+                    && attempt.getFailedSendReason() != FailedSendReason.FAILED_SEND_REASON_SUSPECTED_FRAUD);
+
+    final Optional<Instant> nextVoiceCall = hasAttemptedSms
+        ? sendVoiceVerificationCodePerSessionRateLimiter.getTimeOfNextAction(session)
+        : Optional.empty();
+
+    return new NextActionTimes(nextSms, nextVoiceCall, nextCodeCheck);
   }
 
-  private Phonenumber.PhoneNumber getPhoneNumberFromSession(final RegistrationSession session) throws CompletionException {
+  private Phonenumber.PhoneNumber getPhoneNumberFromSession(final RegistrationSession session) {
     try {
       return PhoneNumberUtil.getInstance().parse(session.getPhoneNumber(), null);
     } catch (final NumberParseException e) {
       // This should never happen because we're parsing a phone number from the session, which means we've
       // parsed it successfully in the past
-      throw new CompletionException(e);
+      throw new AssertionError("Previously-parsed phone number could not be parsed", e);
     }
-  }
-
-  private Function<Throwable, CompletionStage<Void>> addSessionToRateLimitExceededExceptionIfNecessary(
-      final RegistrationSession session) {
-    return throwable -> {
-      Throwable unwrapped = CompletionExceptions.unwrap(throwable);
-      if (unwrapped instanceof RateLimitExceededException e) {
-        // the number-keyed limiter doesn't know about the session, so enrich the exception, if necessary
-        if (e.getRegistrationSession().isEmpty()) {
-          unwrapped = new RateLimitExceededException(e.getRetryAfterDuration().orElse(null), session);
-        }
-      }
-      return CompletableFuture.failedFuture(unwrapped);
-    };
   }
 }

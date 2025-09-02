@@ -10,16 +10,16 @@ import java.time.Duration;
 import java.util.Optional;
 import java.util.Set;
 import javax.annotation.Nullable;
-import org.signal.registration.ratelimit.RateLimitExceededException;
 import org.signal.registration.sender.SenderFraudBlockException;
 import org.signal.registration.sender.SenderInvalidParametersException;
+import org.signal.registration.sender.SenderRateLimitedRequestException;
 import org.signal.registration.sender.SenderRejectedRequestException;
 import org.signal.registration.sender.SenderRejectedTransportException;
 import org.signal.registration.util.CompletionExceptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public class ApiExceptions {
+public class TwilioExceptions {
 
   private static final int INVALID_PARAM_ERROR_CODE = 60200;
 
@@ -48,15 +48,14 @@ public class ApiExceptions {
       60205  // SMS is not supported by landline phone number
   );
 
-  // Codes that can be retried directly
-  private static final Set<Integer> INTERNAL_RETRY_ERROR_CODES = Set.of(
+  private static final Set<Integer> RATE_LIMIT_EXCEEDED_ERROR_CODES = Set.of(
       20429 // Too Many Requests
   );
 
   private static final Duration EXTERNAL_RETRY_INTERVAL = Duration.ofMinutes(1);
-  private static final Logger log = LoggerFactory.getLogger(ApiExceptions.class);
+  private static final Logger log = LoggerFactory.getLogger(TwilioExceptions.class);
 
-  private ApiExceptions() {}
+  private TwilioExceptions() {}
 
   public static @Nullable String extractErrorCode(@NotNull final Throwable throwable) {
     Throwable unwrapped = CompletionExceptions.unwrap(throwable);
@@ -76,13 +75,6 @@ public class ApiExceptions {
     }
 
     return null;
-  }
-
-  public static boolean isRetriable(@NotNull final Throwable throwable) {
-    final Throwable unwrapped = CompletionExceptions.unwrap(throwable);
-    return unwrapped instanceof ApiException apiException
-        && apiException.getCode() != null
-        && INTERNAL_RETRY_ERROR_CODES.contains(apiException.getCode());
   }
 
   private static Optional<SenderInvalidParametersException.ParamName> extractInvalidParameter(
@@ -108,30 +100,27 @@ public class ApiExceptions {
   }
 
   /**
-   * Attempts to wrap a Twilio {@link ApiException} in a more specific exception type. If the given throwable is not
-   * an {@code ApiException} or does not have a classifiable error code, then the original throwable is returned.
+   * Attempts to map a Twilio {@link ApiException} to a more specific {@link SenderRejectedRequestException} subclass.
    *
-   * @param throwable the throwable to wrap in a more specific exception type
+   * @param apiException the {@code ApiException} to map to a more specific exception type
    *
-   * @return the potentially-wrapped throwable
+   * @return a more specific exception if a mapping could be calculated or empty otherwise
    */
-  public static Throwable toSenderException(final Throwable throwable) {
-    if (CompletionExceptions.unwrap(throwable) instanceof ApiException apiException) {
-      if (apiException.getCode() == null) {
-        return apiException;
-      } else if (INVALID_PARAM_ERROR_CODE == apiException.getCode()) {
-        return new SenderInvalidParametersException(throwable, extractInvalidParameter(apiException));
+  public static Optional<SenderRejectedRequestException> toSenderRejectedException(final ApiException apiException) {
+    if (apiException.getCode() != null) {
+      if (INVALID_PARAM_ERROR_CODE == apiException.getCode()) {
+        return Optional.of(new SenderInvalidParametersException(apiException, extractInvalidParameter(apiException)));
       } else if (SUSPECTED_FRAUD_ERROR_CODES.contains(apiException.getCode())) {
-        return new SenderFraudBlockException(throwable);
+        return Optional.of(new SenderFraudBlockException(apiException));
       } else if (REJECTED_REQUEST_ERROR_CODES.contains(apiException.getCode())) {
-        return new SenderRejectedRequestException(throwable);
+        return Optional.of(new SenderRejectedRequestException(apiException));
       } else if (REJECTED_TRANSPORT_ERROR_CODES.contains(apiException.getCode())) {
-        return new SenderRejectedTransportException(throwable);
-      } else if (INTERNAL_RETRY_ERROR_CODES.contains(apiException.getCode())) {
-        return new RateLimitExceededException(EXTERNAL_RETRY_INTERVAL);
+        return Optional.of(new SenderRejectedTransportException(apiException));
+      } else if (RATE_LIMIT_EXCEEDED_ERROR_CODES.contains(apiException.getCode())) {
+        return Optional.of(new SenderRateLimitedRequestException(EXTERNAL_RETRY_INTERVAL));
       }
     }
-
-    return throwable;
+    
+    return Optional.empty();
   }
 }

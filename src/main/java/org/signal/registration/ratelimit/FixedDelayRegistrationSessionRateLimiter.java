@@ -10,8 +10,6 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
 import org.signal.registration.session.RegistrationSession;
 
 /**
@@ -56,7 +54,7 @@ public abstract class FixedDelayRegistrationSessionRateLimiter implements RateLi
   protected abstract Optional<Instant> getLastAttemptTime(final RegistrationSession session);
 
   @Override
-  public CompletableFuture<Optional<Instant>> getTimeOfNextAction(final RegistrationSession session) {
+  public Optional<Instant> getTimeOfNextAction(final RegistrationSession session) {
     final int attempts = getPriorAttemptCount(session);
     final Optional<Instant> maybeLastAttempt = getLastAttemptTime(session);
 
@@ -74,24 +72,22 @@ public abstract class FixedDelayRegistrationSessionRateLimiter implements RateLi
       maybeNextAction = Optional.empty();
     }
 
-    return CompletableFuture.completedFuture(maybeNextAction);
+    return maybeNextAction;
   }
 
   @Override
-  public CompletableFuture<Void> checkRateLimit(final RegistrationSession session) {
-    return getTimeOfNextAction(session)
-        .thenAccept(maybeTimeOfNextAction -> {
-          if (maybeTimeOfNextAction.isPresent()) {
-            final Instant currentTime = clock.instant();
-            final Instant timeOfNextAction = maybeTimeOfNextAction.get();
+  public void checkRateLimit(final RegistrationSession session) throws RateLimitExceededException {
+    final Optional<Instant> maybeTimeOfNextAction = getTimeOfNextAction(session);
 
-            if (currentTime.isBefore(timeOfNextAction)) {
-              throw new CompletionException(
-                  new RateLimitExceededException(Duration.between(currentTime, timeOfNextAction), session));
-            }
-          } else {
-            throw new CompletionException(new RateLimitExceededException(null, session));
-          }
-        });
+    if (maybeTimeOfNextAction.isPresent()) {
+      final Instant currentTime = clock.instant();
+      final Instant timeOfNextAction = maybeTimeOfNextAction.get();
+
+      if (currentTime.isBefore(timeOfNextAction)) {
+        throw new RateLimitExceededException(Duration.between(currentTime, timeOfNextAction), session);
+      }
+    } else {
+      throw new RateLimitExceededException(null, session);
+    }
   }
 }

@@ -1,6 +1,7 @@
 package org.signal.registration.sender.messagebird.classic;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.argThat;
@@ -14,6 +15,7 @@ import com.messagebird.exceptions.GeneralException;
 import com.messagebird.exceptions.UnauthorizedException;
 import com.messagebird.objects.Message;
 import com.messagebird.objects.MessageResponse;
+import java.io.UncheckedIOException;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
@@ -21,7 +23,6 @@ import java.util.Locale;
 import org.apache.commons.lang3.RandomStringUtils;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.function.Executable;
 import org.signal.registration.sender.ApiClientInstrumenter;
 import org.signal.registration.sender.ClientType;
 import org.signal.registration.sender.MessageTransport;
@@ -29,7 +30,6 @@ import org.signal.registration.sender.SenderRejectedRequestException;
 import org.signal.registration.sender.VerificationCodeGenerator;
 import org.signal.registration.sender.VerificationSmsBodyProvider;
 import org.signal.registration.sender.messagebird.MessageBirdSenderConfiguration;
-import org.signal.registration.util.CompletionExceptions;
 
 public class MessageBirdSmsSenderTest {
 
@@ -57,9 +57,8 @@ public class MessageBirdSmsSenderTest {
     when(codeGenerator.generateVerificationCode()).thenReturn(CODE);
     when(bodyProvider.getVerificationBody(NUMBER, ClientType.IOS, CODE, EN)).thenReturn(BODY);
 
-    sender = new MessageBirdSmsSender(Runnable::run, config, codeGenerator, bodyProvider, client, mock(
-        ApiClientInstrumenter.class), new MessageBirdSenderConfiguration("test",
-        Collections.emptyMap()));
+    sender = new MessageBirdSmsSender(config, codeGenerator, bodyProvider, client, mock(ApiClientInstrumenter.class),
+        new MessageBirdSenderConfiguration("test", Collections.emptyMap()));
   }
 
   private static MessageResponse response(int failedDeliveryCount) {
@@ -67,20 +66,9 @@ public class MessageBirdSmsSenderTest {
     when(recipients.getTotalDeliveryFailedCount()).thenReturn(failedDeliveryCount);
     final MessageResponse response = mock(MessageResponse.class);
     when(response.getRecipients()).thenReturn(recipients);
-    when(response.getId()).thenReturn(RandomStringUtils.randomAlphabetic(16));
+    when(response.getId()).thenReturn(RandomStringUtils.insecure().nextAlphabetic(16));
     return response;
   }
-
-  public static <T extends Throwable> T assertThrowsUnwrapped(Class<T> expectedType, Executable executable) {
-    return assertThrows(expectedType, () -> {
-      try {
-        executable.execute();
-      } catch (Throwable throwable) {
-        throw CompletionExceptions.unwrap(throwable);
-      }
-    });
-  }
-
 
   @Test
   public void failedSend() throws GeneralException, UnauthorizedException {
@@ -88,9 +76,8 @@ public class MessageBirdSmsSenderTest {
     when(client.sendMessage(argThat((Message message) ->
         message.getBody().equals(BODY) && message.getRecipients().equals(E164))))
         .thenReturn(response);
-    assertThrowsUnwrapped(SenderRejectedRequestException.class, () -> sender
-        .sendVerificationCode(MessageTransport.SMS, NUMBER, EN, ClientType.IOS)
-        .join());
+    assertThrows(SenderRejectedRequestException.class, () -> sender
+        .sendVerificationCode(MessageTransport.SMS, NUMBER, EN, ClientType.IOS));
   }
 
   @Test
@@ -98,13 +85,16 @@ public class MessageBirdSmsSenderTest {
     when(client.sendMessage(argThat((Message message) ->
         message.getBody().equals(BODY) && message.getRecipients().equals(E164))))
         .thenThrow(new GeneralException("test"));
-    assertThrowsUnwrapped(GeneralException.class, () -> sender
-        .sendVerificationCode(MessageTransport.SMS, NUMBER, EN, ClientType.IOS)
-        .join());
+
+    final UncheckedIOException ioException = assertThrows(UncheckedIOException.class,
+        () -> sender.sendVerificationCode(MessageTransport.SMS, NUMBER, EN, ClientType.IOS));
+
+    assertInstanceOf(GeneralException.class, ioException.getCause().getCause());
   }
 
   @Test
-  public void sendAndVerify() throws GeneralException, UnauthorizedException {
+  public void sendAndVerify()
+      throws GeneralException, UnauthorizedException, SenderRejectedRequestException {
     when(codeGenerator.generateVerificationCode()).thenReturn("12345");
     when(bodyProvider.getVerificationBody(NUMBER, ClientType.IOS, "12345", EN)).thenReturn("body");
 
@@ -115,11 +105,10 @@ public class MessageBirdSmsSenderTest {
 
     final byte[] senderData = sender
         .sendVerificationCode(MessageTransport.SMS, NUMBER, Locale.LanguageRange.parse("en"), ClientType.IOS)
-        .join()
         .senderData();
 
-    assertFalse(sender.checkVerificationCode("123456", senderData).join());
-    assertTrue(sender.checkVerificationCode("12345", senderData).join());
+    assertFalse(sender.checkVerificationCode("123456", senderData));
+    assertTrue(sender.checkVerificationCode("12345", senderData));
   }
 
 }

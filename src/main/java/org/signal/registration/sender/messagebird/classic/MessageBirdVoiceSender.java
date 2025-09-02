@@ -12,23 +12,20 @@ import com.messagebird.exceptions.MessageBirdException;
 import com.messagebird.objects.VoiceMessage;
 import com.messagebird.objects.VoiceMessageResponse;
 import io.micrometer.core.instrument.Timer;
-import io.micronaut.scheduling.TaskExecutors;
-import jakarta.inject.Named;
 import jakarta.inject.Singleton;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.Executor;
 import org.apache.commons.lang3.StringUtils;
 import org.signal.registration.sender.ApiClientInstrumenter;
 import org.signal.registration.sender.AttemptData;
 import org.signal.registration.sender.ClientType;
 import org.signal.registration.sender.MessageTransport;
 import org.signal.registration.sender.SenderIdSelector;
+import org.signal.registration.sender.SenderRejectedRequestException;
 import org.signal.registration.sender.UnsupportedMessageTransportException;
 import org.signal.registration.sender.VerificationCodeGenerator;
 import org.signal.registration.sender.VerificationCodeSender;
@@ -53,7 +50,6 @@ public class MessageBirdVoiceSender implements VerificationCodeSender {
   public static final String SENDER_NAME = "messagebird-voice";
 
   private final MessageBirdVoiceConfiguration configuration;
-  private final Executor executor;
   private final VerificationCodeGenerator verificationCodeGenerator;
   private final MessageBirdVoiceTTSBodyProvider verificationTTSBodyProvider;
   private final MessageBirdClient client;
@@ -61,7 +57,6 @@ public class MessageBirdVoiceSender implements VerificationCodeSender {
   private final SenderIdSelector senderIdSelector;
 
   public MessageBirdVoiceSender(
-      final @Named(TaskExecutors.IO) Executor executor,
       final MessageBirdVoiceConfiguration configuration,
       final VerificationCodeGenerator verificationCodeGenerator,
       final MessageBirdVoiceTTSBodyProvider verificationTTSBodyProvider,
@@ -69,7 +64,6 @@ public class MessageBirdVoiceSender implements VerificationCodeSender {
       final ApiClientInstrumenter apiClientInstrumenter,
       final MessageBirdSenderConfiguration senderConfiguration) {
     this.configuration = configuration;
-    this.executor = executor;
     this.verificationCodeGenerator = verificationCodeGenerator;
     this.verificationTTSBodyProvider = verificationTTSBodyProvider;
     this.client = messageBirdClient;
@@ -102,9 +96,14 @@ public class MessageBirdVoiceSender implements VerificationCodeSender {
   }
 
   @Override
-  public CompletableFuture<AttemptData> sendVerificationCode(final MessageTransport messageTransport,
+  public AttemptData sendVerificationCode(final MessageTransport messageTransport,
       final Phonenumber.PhoneNumber phoneNumber, final List<Locale.LanguageRange> languageRanges,
-      final ClientType clientType) throws UnsupportedMessageTransportException {
+      final ClientType clientType) throws SenderRejectedRequestException {
+
+    if (messageTransport != MessageTransport.VOICE) {
+      throw new UnsupportedMessageTransportException();
+    }
+
     final String e164 = PhoneNumberUtil.getInstance().format(phoneNumber, PhoneNumberUtil.PhoneNumberFormat.E164);
 
     final String verificationCode = verificationCodeGenerator.generateVerificationCode();
@@ -117,38 +116,57 @@ public class MessageBirdVoiceSender implements VerificationCodeSender {
 
     final Timer.Sample sample = Timer.start();
 
-    return CompletableFuture.supplyAsync(() -> {
-          try {
-            final VoiceMessageResponse response = this.client.sendVoiceMessage(request);
-            if (response.getRecipients().getTotalDeliveryFailedCount() != 0) {
-              throw new CompletionException(new IOException("Failed to deliver voice message"));
-            }
-            return new AttemptData(
-                Optional.of(response.getId()),
-                MessageBirdClassicSessionData.newBuilder().setVerificationCode(verificationCode).build().toByteArray());
-          } catch (MessageBirdException e) {
-            logger.debug("Failed verification with {}, errors={}", e.getMessage(), e.getErrors());
-            throw new CompletionException(e);
-          }
-        }, this.executor)
-        .whenComplete((ignored, throwable) ->
-            apiClientInstrumenter.recordApiCallMetrics(
-                getName(),
-                "call.create",
-                throwable == null,
-                MessageBirdExceptions.extract(throwable),
-                sample));
+    try {
+      final VoiceMessageResponse response = this.client.sendVoiceMessage(request);
+
+      if (response.getRecipients().getTotalDeliveryFailedCount() != 0) {
+        throw new SenderRejectedRequestException("Failed to deliver voice message");
+      }
+
+      apiClientInstrumenter.recordApiCallMetrics(
+          getName(),
+          "call.create",
+          true,
+          null,
+          sample);
+
+      return new AttemptData(
+          Optional.of(response.getId()),
+          MessageBirdClassicSessionData.newBuilder().setVerificationCode(verificationCode).build().toByteArray());
+    } catch (final MessageBirdException e) {
+      logger.debug("Failed verification with {}, errors={}", e.getMessage(), e.getErrors());
+
+      apiClientInstrumenter.recordApiCallMetrics(
+          getName(),
+          "call.create",
+          false,
+          MessageBirdExceptions.extract(e),
+          sample);
+
+      throw MessageBirdExceptions.toSenderRejectedException(e)
+          .orElseThrow(() -> new UncheckedIOException(new IOException(e)));
+    } catch (final SenderRejectedRequestException | RuntimeException e) {
+      logger.debug("Failed verification", e);
+
+      apiClientInstrumenter.recordApiCallMetrics(
+          getName(),
+          "call.create",
+          false,
+          MessageBirdExceptions.extract(e),
+          sample);
+
+      throw e;
+    }
   }
 
   @Override
-  public CompletableFuture<Boolean> checkVerificationCode(final String verificationCode, final byte[] sessionData) {
+  public boolean checkVerificationCode(final String verificationCode, final byte[] sessionData) {
     try {
       final String storedVerificationCode = MessageBirdClassicSessionData.parseFrom(sessionData).getVerificationCode();
-      return CompletableFuture.completedFuture(StringUtils.equals(verificationCode, storedVerificationCode));
+      return StringUtils.equals(verificationCode, storedVerificationCode);
     } catch (final InvalidProtocolBufferException e) {
       logger.error("Failed to parse stored session data", e);
-      return CompletableFuture.failedFuture(e);
+      throw new UncheckedIOException(e);
     }
-
   }
 }

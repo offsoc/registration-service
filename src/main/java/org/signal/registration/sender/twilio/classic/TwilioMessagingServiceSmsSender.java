@@ -6,24 +6,26 @@
 package org.signal.registration.sender.twilio.classic;
 
 import com.google.i18n.phonenumbers.Phonenumber;
+import com.twilio.exception.ApiException;
 import com.twilio.http.TwilioRestClient;
 import com.twilio.rest.api.v2010.account.Message;
 import io.micrometer.core.instrument.Timer;
 import jakarta.inject.Singleton;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
-import java.util.concurrent.CompletableFuture;
 import org.signal.registration.sender.ApiClientInstrumenter;
 import org.signal.registration.sender.AttemptData;
 import org.signal.registration.sender.ClientType;
 import org.signal.registration.sender.MessageTransport;
+import org.signal.registration.sender.SenderRejectedRequestException;
 import org.signal.registration.sender.UnsupportedMessageTransportException;
 import org.signal.registration.sender.VerificationCodeGenerator;
 import org.signal.registration.sender.VerificationCodeSender;
 import org.signal.registration.sender.VerificationSmsBodyProvider;
-import org.signal.registration.sender.twilio.ApiExceptions;
-import org.signal.registration.util.CompletionExceptions;
+import org.signal.registration.sender.twilio.TwilioExceptions;
 
 /**
  * A concrete implementation of an {@code AbstractTwilioProvidedCodeSender} that sends its codes via the Twilio
@@ -41,7 +43,7 @@ public class TwilioMessagingServiceSmsSender extends AbstractTwilioProvidedCodeS
 
   public static final String SENDER_NAME = "twilio-programmable-messaging";
 
-  public TwilioMessagingServiceSmsSender(final TwilioRestClient twilioRestClient,
+  TwilioMessagingServiceSmsSender(final TwilioRestClient twilioRestClient,
       final VerificationCodeGenerator verificationCodeGenerator,
       final VerificationSmsBodyProvider verificationSmsBodyProvider,
       final TwilioMessagingConfiguration configuration,
@@ -77,10 +79,10 @@ public class TwilioMessagingServiceSmsSender extends AbstractTwilioProvidedCodeS
   }
 
   @Override
-  public CompletableFuture<AttemptData> sendVerificationCode(final MessageTransport messageTransport,
-                                                             final Phonenumber.PhoneNumber phoneNumber,
-                                                             final List<Locale.LanguageRange> languageRanges,
-                                                             final ClientType clientType) throws UnsupportedMessageTransportException {
+  public AttemptData sendVerificationCode(final MessageTransport messageTransport,
+      final Phonenumber.PhoneNumber phoneNumber,
+      final List<Locale.LanguageRange> languageRanges,
+      final ClientType clientType) throws SenderRejectedRequestException {
 
     if (messageTransport != MessageTransport.SMS) {
       throw new UnsupportedMessageTransportException();
@@ -93,22 +95,29 @@ public class TwilioMessagingServiceSmsSender extends AbstractTwilioProvidedCodeS
 
     final Timer.Sample sample = Timer.start();
 
-    return Message.creator(twilioNumberFromPhoneNumber(phoneNumber), messagingServiceSid,
-            verificationSmsBodyProvider.getVerificationBody(phoneNumber, clientType, verificationCode, languageRanges))
-        .createAsync(twilioRestClient)
-        .whenComplete((message, throwable) ->
-            apiClientInstrumenter.recordApiCallMetrics(
-                this.getName(),
-                "message.create",
-                throwable == null,
-                ApiExceptions.extractErrorCode(throwable),
-                sample))
-        .handle((message, throwable) -> {
-          if (throwable == null) {
-            return buildAttemptMetadata(message.getSid(), verificationCode);
-          }
+    try {
+      final Message message = Message.creator(twilioNumberFromPhoneNumber(phoneNumber), messagingServiceSid,
+              verificationSmsBodyProvider.getVerificationBody(phoneNumber, clientType, verificationCode, languageRanges))
+          .create(twilioRestClient);
 
-          throw CompletionExceptions.wrap(ApiExceptions.toSenderException(throwable));
-        });
+      apiClientInstrumenter.recordApiCallMetrics(
+          this.getName(),
+          "message.create",
+          true,
+          null,
+          sample);
+
+      return buildAttemptMetadata(message.getSid(), verificationCode);
+    } catch (final ApiException e) {
+      apiClientInstrumenter.recordApiCallMetrics(
+          this.getName(),
+          "message.create",
+          false,
+          TwilioExceptions.extractErrorCode(e),
+          sample);
+
+      throw TwilioExceptions.toSenderRejectedException(e)
+          .orElseThrow(() -> new UncheckedIOException(new IOException(e)));
+    }
   }
 }

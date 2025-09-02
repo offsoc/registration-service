@@ -34,8 +34,7 @@ class SendVoiceVerificationCodeRateLimiterTest {
         new SendVoiceVerificationCodeRateLimiter(delayAfterFirstSms, delays, Clock.fixed(currentTime, ZoneId.systemDefault()));
 
     // No prior SMS
-    assertEquals(Optional.empty(),
-        rateLimiter.getTimeOfNextAction(RegistrationSession.newBuilder().build()).join());
+    assertEquals(Optional.empty(), rateLimiter.getTimeOfNextAction(RegistrationSession.newBuilder().build()));
 
     // Still in "cooldown" period from first SMS
     assertEquals(Optional.of(currentTime.plus(delayAfterFirstSms)),
@@ -44,8 +43,7 @@ class SendVoiceVerificationCodeRateLimiterTest {
                     .setMessageTransport(MessageTransport.MESSAGE_TRANSPORT_SMS)
                     .setTimestampEpochMillis(currentTime.toEpochMilli())
                     .build())
-            .build())
-            .join());
+            .build()));
 
     // After SMS "cooldown" period, but before first voice verification code
     assertTrue(rateLimiter.getTimeOfNextAction(RegistrationSession.newBuilder()
@@ -54,7 +52,6 @@ class SendVoiceVerificationCodeRateLimiterTest {
                 .setTimestampEpochMillis(currentTime.minus(delayAfterFirstSms).toEpochMilli())
                 .build())
             .build())
-        .join()
         .map(timeOfNextAction -> timeOfNextAction.equals(currentTime) || timeOfNextAction.isBefore(currentTime))
         .orElse(false));
 
@@ -62,7 +59,6 @@ class SendVoiceVerificationCodeRateLimiterTest {
     assertTrue(rateLimiter.getTimeOfNextAction(RegistrationSession.newBuilder()
             .addRejectedTransports(MessageTransport.MESSAGE_TRANSPORT_SMS)
             .build())
-        .join()
         .map(timeOfNextAction -> timeOfNextAction.equals(currentTime) || timeOfNextAction.isBefore(currentTime))
         .orElse(false));
 
@@ -73,8 +69,7 @@ class SendVoiceVerificationCodeRateLimiterTest {
                 .setTimestampEpochMillis(currentTime.minus(delayAfterFirstSms).toEpochMilli())
                 .build())
             .addRejectedTransports(MessageTransport.MESSAGE_TRANSPORT_VOICE)
-            .build())
-        .join());
+            .build()));
 
     // After first voice verification code
     assertEquals(Optional.of(currentTime.plus(delays.get(0))),
@@ -87,8 +82,7 @@ class SendVoiceVerificationCodeRateLimiterTest {
                     .setMessageTransport(MessageTransport.MESSAGE_TRANSPORT_VOICE)
                     .setTimestampEpochMillis(currentTime.toEpochMilli())
                     .build())
-                .build())
-            .join());
+                .build()));
 
     // Voice verification attempts exhausted
     assertEquals(Optional.empty(),
@@ -109,8 +103,7 @@ class SendVoiceVerificationCodeRateLimiterTest {
                     .setMessageTransport(MessageTransport.MESSAGE_TRANSPORT_VOICE)
                     .setTimestampEpochMillis(currentTime.toEpochMilli())
                     .build())
-                .build())
-            .join());
+                .build()));
   }
 
   @Test

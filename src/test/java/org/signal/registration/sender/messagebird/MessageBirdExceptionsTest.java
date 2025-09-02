@@ -5,19 +5,20 @@
 
 package org.signal.registration.sender.messagebird;
 
-import java.util.List;
-import java.util.stream.Stream;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
 import com.messagebird.exceptions.GeneralException;
 import com.messagebird.objects.ErrorReport;
 import io.micronaut.http.HttpStatus;
+import java.util.List;
+import java.util.stream.Stream;
+import javax.annotation.Nullable;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.signal.registration.sender.SenderRejectedRequestException;
-
-import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 public class MessageBirdExceptionsTest {
 
@@ -31,13 +32,16 @@ public class MessageBirdExceptionsTest {
         Arguments.of(List.of(2), HttpStatus.OK, SenderRejectedRequestException.class),
         Arguments.of(List.of(2, 9), HttpStatus.OK, SenderRejectedRequestException.class),
         Arguments.of(List.of(9), HttpStatus.TOO_MANY_REQUESTS, SenderRejectedRequestException.class),
-        Arguments.of(List.of(), HttpStatus.I_AM_A_TEAPOT, GeneralException.class)
+        Arguments.of(List.of(), HttpStatus.I_AM_A_TEAPOT, null)
     );
   }
 
   @ParameterizedTest
   @MethodSource
-  public void selectException(List<Integer> messageBirdErrors, HttpStatus status, Class<? extends Exception> expectedType) {
+  public void selectException(final List<Integer> messageBirdErrors,
+      final HttpStatus status,
+      @Nullable final Class<? extends Exception> expectedType) {
+
     final GeneralException ex = mock(GeneralException.class);
     when(ex.getErrors())
         .thenReturn(messageBirdErrors
@@ -47,8 +51,9 @@ public class MessageBirdExceptionsTest {
 
     when(ex.getResponseCode()).thenReturn(status.getCode());
 
-    final Throwable throwable = MessageBirdExceptions.toSenderException(ex);
-    assertTrue(expectedType.isInstance(throwable));
+    assertEquals(expectedType, MessageBirdExceptions.toSenderRejectedException(ex)
+        .map(SenderRejectedRequestException::getClass)
+        .orElse(null));
   }
 
 }

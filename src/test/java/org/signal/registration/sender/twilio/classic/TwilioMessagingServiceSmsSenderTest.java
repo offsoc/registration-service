@@ -32,6 +32,6 @@ class TwilioMessagingServiceSmsSenderTest {
     assertThrows(UnsupportedMessageTransportException.class, () -> sender.sendVerificationCode(MessageTransport.VOICE,
         PhoneNumberUtil.getInstance().getExampleNumber("US"),
         Collections.emptyList(),
-        ClientType.UNKNOWN).join());
+        ClientType.UNKNOWN));
   }
 }

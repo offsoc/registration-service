@@ -7,7 +7,6 @@ package org.signal.registration.sender.fictitious;
 
 import com.google.i18n.phonenumbers.Phonenumber;
 import java.time.Duration;
-import java.util.concurrent.CompletableFuture;
 
 /**
  * A fictitious number verification code repository stores verification codes for fictitious phone numbers (i.e. numbers
@@ -24,10 +23,6 @@ public interface FictitiousNumberVerificationCodeRepository {
    * @param phoneNumber the phone number for which to store a verification code
    * @param verificationCode the verification code for the given phone number
    * @param ttl the time after which the verification code is no longer valid and may be discarded
-   *
-   * @return a future that completes when the verification code has been stored
    */
-  CompletableFuture<Void> storeVerificationCode(Phonenumber.PhoneNumber phoneNumber,
-      String verificationCode,
-      final Duration ttl);
+  void storeVerificationCode(Phonenumber.PhoneNumber phoneNumber, String verificationCode, final Duration ttl);
 }

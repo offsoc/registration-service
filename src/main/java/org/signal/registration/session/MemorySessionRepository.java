@@ -18,8 +18,6 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 import org.signal.registration.Environments;
@@ -57,7 +55,7 @@ public class MemorySessionRepository implements SessionRepository {
   }
 
   @Override
-  public CompletableFuture<RegistrationSession> createSession(final Phonenumber.PhoneNumber phoneNumber,
+  public RegistrationSession createSession(final Phonenumber.PhoneNumber phoneNumber,
       final SessionMetadata sessionMetadata,
       final Instant expiration) {
 
@@ -72,11 +70,11 @@ public class MemorySessionRepository implements SessionRepository {
 
     sessionsById.put(sessionId, session);
 
-    return CompletableFuture.completedFuture(session);
+    return session;
   }
 
   @Override
-  public CompletableFuture<RegistrationSession> getSession(final UUID sessionId) {
+  public RegistrationSession getSession(final UUID sessionId) throws SessionNotFoundException {
     final RegistrationSession session = sessionsById.computeIfPresent(sessionId, (id, existingSession) -> {
           if (clock.instant().isAfter(Instant.ofEpochMilli(existingSession.getExpirationEpochMillis()))) {
             sessionCompletedEventPublisher.publishEventAsync(new SessionCompletedEvent(existingSession));
@@ -86,14 +84,16 @@ public class MemorySessionRepository implements SessionRepository {
           }
         });
 
-    return session != null ?
-        CompletableFuture.completedFuture(session) :
-        CompletableFuture.failedFuture(new SessionNotFoundException());
+    if (session != null) {
+      return session;
+    }
+
+    throw new SessionNotFoundException();
   }
 
   @Override
-  public CompletableFuture<RegistrationSession> updateSession(final UUID sessionId,
-      final Function<RegistrationSession, CompletionStage<RegistrationSession>> sessionUpdater) {
+  public RegistrationSession updateSession(final UUID sessionId,
+      final Function<RegistrationSession, RegistrationSession> sessionUpdater) throws SessionNotFoundException {
 
     final RegistrationSession updatedSession =
         sessionsById.computeIfPresent(sessionId, (id, existingSession) -> {
@@ -101,13 +101,15 @@ public class MemorySessionRepository implements SessionRepository {
             sessionCompletedEventPublisher.publishEventAsync(new SessionCompletedEvent(existingSession));
             return null;
           } else {
-            return sessionUpdater.apply(existingSession).toCompletableFuture().join();
+            return sessionUpdater.apply(existingSession);
           }
         });
 
-    return updatedSession != null ?
-        CompletableFuture.completedFuture(updatedSession) :
-        CompletableFuture.failedFuture(new SessionNotFoundException());
+    if (updatedSession != null) {
+      return updatedSession;
+    }
+
+    throw new SessionNotFoundException();
   }
 
   @VisibleForTesting

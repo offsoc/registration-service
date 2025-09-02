@@ -30,25 +30,26 @@ public class InfobipExceptions {
   );
 
   /**
-   * Attempts to wrap an Infobip {@link com.infobip.ApiException} in a more specific exception type. If the given
-   * exception does not have a classifiable error code, then the original exception is returned.
+   * Attempts to map an Infobip {@link ApiException} to a more specific {@link SenderRejectedRequestException} subclass.
    *
-   * @param exception the Infobip ApiException to wrap in a more specific exception type
+   * @param apiException the {@code ApiException} to map to a more specific exception type
    *
-   * @return the potentially-wrapped throwable
+   * @return a more specific exception if a mapping could be calculated or empty otherwise
    */
-  public static Exception toSenderException(final ApiException exception) {
+  public static Optional<SenderRejectedRequestException> toSenderRejectedException(final ApiException apiException) {
     Optional<HttpStatus> maybeHttpStatus;
+
     try {
-      maybeHttpStatus = Optional.of(HttpStatus.valueOf(exception.responseStatusCode()));
-    } catch (IllegalArgumentException ignored) {
+      maybeHttpStatus = Optional.of(HttpStatus.valueOf(apiException.responseStatusCode()));
+    } catch (final IllegalArgumentException ignored) {
       maybeHttpStatus = Optional.empty();
     }
 
-    return maybeHttpStatus
-        .filter(REJECTED_HTTP_STATUS_CODES::contains)
-        .map(ignored -> (Exception) new SenderRejectedRequestException(exception))
-        .orElse(exception);
+    if (maybeHttpStatus.map(REJECTED_HTTP_STATUS_CODES::contains).orElse(false)) {
+      return Optional.of(new SenderRejectedRequestException(apiException));
+    }
+
+    return Optional.empty();
   }
 
   public static @Nullable String getErrorCode(@NotNull final Throwable throwable) {

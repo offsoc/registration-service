@@ -12,6 +12,10 @@ package org.signal.registration.sender;
  */
 public class SenderRejectedRequestException extends Exception {
 
+  public SenderRejectedRequestException() {
+    super();
+  }
+
   public SenderRejectedRequestException(final String message) {
     super(message);
   }

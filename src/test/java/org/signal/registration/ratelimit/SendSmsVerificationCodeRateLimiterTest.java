@@ -230,7 +230,6 @@ class SendSmsVerificationCodeRateLimiterTest {
 
     assertEquals(Optional.empty(), rateLimiter.getTimeOfNextAction(RegistrationSession.newBuilder()
         .addRejectedTransports(MessageTransport.MESSAGE_TRANSPORT_SMS)
-        .build())
-        .join());
+        .build()));
   }
 }

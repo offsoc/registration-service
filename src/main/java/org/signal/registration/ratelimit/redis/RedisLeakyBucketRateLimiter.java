@@ -9,6 +9,8 @@ import io.lettuce.core.RedisException;
 import io.lettuce.core.RedisNoScriptException;
 import io.lettuce.core.ScriptOutputType;
 import io.lettuce.core.api.StatefulRedisConnection;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
@@ -20,14 +22,10 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.HexFormat;
 import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
-import io.micrometer.core.instrument.Counter;
-import io.micrometer.core.instrument.MeterRegistry;
 import org.signal.registration.metrics.MetricsUtil;
 import org.signal.registration.ratelimit.LeakyBucketRateLimiterConfiguration;
 import org.signal.registration.ratelimit.RateLimitExceededException;
 import org.signal.registration.ratelimit.RateLimiter;
-import org.signal.registration.util.CompletionExceptions;
 
 /**
  * A Redis token bucket rate limiter controls the rate at which actions may be taken using a
@@ -85,34 +83,28 @@ public abstract class RedisLeakyBucketRateLimiter<K> implements RateLimiter<K> {
   protected abstract boolean shouldFailOpen();
 
   @Override
-  public CompletableFuture<Optional<Instant>> getTimeOfNextAction(final K key) {
-    return executeScript(getBucketName(key), false)
-        .thenApply(duration -> Optional.of(clock.instant().plus(duration)));
+  public Optional<Instant> getTimeOfNextAction(final K key) {
+    return Optional.of(clock.instant().plus(executeScript(getBucketName(key), false)));
   }
 
   @Override
-  public CompletableFuture<Void> checkRateLimit(final K key) {
-    return executeScript(getBucketName(key), true)
-        .thenAccept(duration -> {
-          if (duration.toMillis() > 0) {
-            throw CompletionExceptions.wrap(new RateLimitExceededException(duration));
-          }
-        })
-        .exceptionally(throwable -> {
-          if (CompletionExceptions.unwrap(throwable) instanceof RedisException) {
-            if (shouldFailOpen()) {
-              failedOpenCounter.increment();
-              return null;
-            } else {
-              throw CompletionExceptions.wrap(new RateLimitExceededException(null));
-            }
-          }
+  public void checkRateLimit(final K key) throws RateLimitExceededException {
+    try {
+      final Duration durationToNextAction = executeScript(getBucketName(key), true);
 
-          throw CompletionExceptions.wrap(throwable);
-        });
+      if (durationToNextAction.isPositive()) {
+        throw new RateLimitExceededException(durationToNextAction);
+      }
+    } catch (final RedisException e) {
+      if (shouldFailOpen()) {
+        failedOpenCounter.increment();
+      } else {
+        throw new RateLimitExceededException(null);
+      }
+    }
   }
 
-  private CompletableFuture<Duration> executeScript(final String key, final boolean consumeTokens) {
+  private Duration executeScript(final String key, final boolean consumeTokens) {
     final String[] keys = { key };
 
     final String[] arguments = {
@@ -123,17 +115,11 @@ public abstract class RedisLeakyBucketRateLimiter<K> implements RateLimiter<K> {
         String.valueOf(consumeTokens)
     };
 
-    return connection.async().evalsha(scriptHash, ScriptOutputType.INTEGER, keys, arguments)
-        .toCompletableFuture()
-        .thenApply(response -> Duration.ofMillis((long) response))
-        .exceptionallyCompose(throwable -> {
-          if (CompletionExceptions.unwrap(throwable) instanceof RedisNoScriptException) {
-            return connection.async().scriptLoad(script).toCompletableFuture()
-                .thenCompose(ignored -> connection.async().evalsha(scriptHash, ScriptOutputType.INTEGER, keys, arguments))
-                .thenApply(response -> Duration.ofMillis((long) response));
-          }
-
-          throw CompletionExceptions.wrap(throwable);
-        });
+    try {
+      return Duration.ofMillis(connection.sync().evalsha(scriptHash, ScriptOutputType.INTEGER, keys, arguments));
+    } catch (final RedisNoScriptException e) {
+      connection.sync().scriptLoad(script);
+      return Duration.ofMillis(connection.sync().evalsha(scriptHash, ScriptOutputType.INTEGER, keys, arguments));
+    }
   }
 }

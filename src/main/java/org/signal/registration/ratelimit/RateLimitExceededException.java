@@ -9,6 +9,7 @@ import org.signal.registration.NoStackTraceException;
 import org.signal.registration.session.RegistrationSession;
 import javax.annotation.Nullable;
 import java.time.Duration;
+import java.util.Objects;
 import java.util.Optional;
 
 /**
@@ -22,7 +23,7 @@ public class RateLimitExceededException extends NoStackTraceException {
   private final Duration retryAfterDuration;
 
   @Nullable
-  private final RegistrationSession registrationSession;
+  private RegistrationSession registrationSession;
 
   public RateLimitExceededException(final Duration retryAfterDuration) {
     this(retryAfterDuration, null);
@@ -33,6 +34,10 @@ public class RateLimitExceededException extends NoStackTraceException {
 
     this.retryAfterDuration = retryAfterDuration;
     this.registrationSession = registrationSession;
+  }
+
+  public void setRegistrationSession(final RegistrationSession registrationSession) {
+    this.registrationSession = Objects.requireNonNull(registrationSession);
   }
 
   /**

@@ -7,7 +7,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.Random;
-import java.util.concurrent.CompletableFuture;
 
 public class TestVerificationCodeSender implements VerificationCodeSender {
 
@@ -46,17 +45,17 @@ public class TestVerificationCodeSender implements VerificationCodeSender {
   }
 
   @Override
-  public CompletableFuture<AttemptData> sendVerificationCode(
+  public AttemptData sendVerificationCode(
       final MessageTransport messageTransport,
       final Phonenumber.PhoneNumber phoneNumber,
       final List<Locale.LanguageRange> languageRanges,
       final ClientType clientType) throws UnsupportedMessageTransportException {
-    String code = String.format("%06d", new Random().nextInt(1_000_000));
-    return CompletableFuture.completedFuture(new AttemptData(Optional.empty(), code.getBytes(StandardCharsets.UTF_8)));
+    final String code = String.format("%06d", new Random().nextInt(1_000_000));
+    return new AttemptData(Optional.empty(), code.getBytes(StandardCharsets.UTF_8));
   }
 
   @Override
-  public CompletableFuture<Boolean> checkVerificationCode(final String verificationCode, final byte[] senderData) {
-    return CompletableFuture.completedFuture(verificationCode.equals(new String(senderData, StandardCharsets.UTF_8)));
+  public boolean checkVerificationCode(final String verificationCode, final byte[] senderData) {
+    return verificationCode.equals(new String(senderData, StandardCharsets.UTF_8));
   }
 }

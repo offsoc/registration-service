@@ -37,28 +37,21 @@ public class MessageBirdExceptions {
   );
 
   /**
-   * Attempts to wrap a MessageBird {@link MessageBirdException} in a more specific exception type. If the given
-   * exception does not have a classifiable error code, then the original exception is returned.
+   * Attempts to map a {@link MessageBirdException} to a more specific {@link SenderRejectedRequestException} subclass.
    *
-   * @param e the MessageBirdException to wrap in a more specific exception type
+   * @param messageBirdException the exception to map to a more specific exception type
    *
-   * @return the potentially-wrapped throwable
+   * @return a more specific exception if a mapping could be calculated or empty otherwise
    */
-  public static Throwable toSenderException(final MessageBirdException e) {
+  public static Optional<SenderRejectedRequestException> toSenderRejectedException(final MessageBirdException messageBirdException) {
     // First check for any messagebird specific api errors we are interested in
-    final List<ErrorReport> errorsReports = errorReports(e);
-    if (errorsReports.stream().map(ErrorReport::getCode).anyMatch(REJECTED_REQUEST_ERROR_CODES::contains)) {
-      return new SenderRejectedRequestException(e);
+    if (errorReports(messageBirdException).stream().map(ErrorReport::getCode).anyMatch(REJECTED_REQUEST_ERROR_CODES::contains)) {
+      return Optional.of(new SenderRejectedRequestException(messageBirdException));
     }
 
-    // Then check for http error codes
-    final Optional<HttpStatus> httpError = httpError(e);
-
-    return httpError
+    return httpError(messageBirdException)
         .filter(REJECTED_REQUEST_HTTP_CODES::contains)
-        .map(ignored -> (Throwable) new SenderRejectedRequestException(e))
-        .orElse(e);
-
+        .map(ignored -> new SenderRejectedRequestException(messageBirdException));
   }
 
   public static @Nullable String extract(@NotNull Throwable throwable) {
@@ -67,7 +60,7 @@ public class MessageBirdExceptions {
 
     final List<ErrorReport> errorsReports = errorReports(throwable);
     if (!errorsReports.isEmpty()) {
-      return String.valueOf(errorsReports.get(0).getCode());
+      return String.valueOf(errorsReports.getFirst().getCode());
     }
 
     final Optional<HttpStatus> httpError = httpError(throwable);

@@ -27,7 +27,7 @@
 
     <!-- See https://console.cloud.google.com/artifacts/docker/google.com:cloudsdktool/us/gcr.io/google-cloud-cli -->
     <firestore.emulator.version>526.0.1-emulators</firestore.emulator.version>
-    <reactive.grpc.version>1.2.4</reactive.grpc.version>
+    <simple-grpc.version>0.1.0</simple-grpc.version>
     <testcontainers.version>1.21.2</testcontainers.version>
 
     <!-- This overrides the grpc version in the micronaut-parent pom we inherit from. Micronaut 4.8.3 uses gRPC 1.69.1
@@ -141,9 +141,9 @@
     </dependency>
 
     <dependency>
-      <groupId>com.salesforce.servicelibs</groupId>
-      <artifactId>reactor-grpc-stub</artifactId>
-      <version>${reactive.grpc.version}</version>
+      <groupId>org.signal</groupId>
+      <artifactId>simple-grpc-runtime</artifactId>
+      <version>${simple-grpc.version}</version>
     </dependency>
 
     <dependency>
@@ -479,11 +479,11 @@
 
           <protocPlugins>
             <protocPlugin>
-              <id>reactor-grpc</id>
-              <groupId>com.salesforce.servicelibs</groupId>
-              <artifactId>reactor-grpc</artifactId>
-              <version>${reactive.grpc.version}</version>
-              <mainClass>com.salesforce.reactorgrpc.ReactorGrpcGenerator</mainClass>
+              <id>simple</id>
+              <groupId>org.signal</groupId>
+              <artifactId>simple-grpc-generator</artifactId>
+              <version>${simple-grpc.version}</version>
+              <mainClass>org.signal.grpc.simple.SimpleGrpcGenerator</mainClass>
             </protocPlugin>
           </protocPlugins>
         </configuration>

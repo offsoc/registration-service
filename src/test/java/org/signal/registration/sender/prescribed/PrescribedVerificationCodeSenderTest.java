@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import org.signal.registration.sender.ClientType;
 import org.signal.registration.sender.MessageTransport;
 import org.signal.registration.sender.SenderRejectedRequestException;
+import java.io.UncheckedIOException;
 import java.util.Collections;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -21,6 +22,7 @@ import java.util.concurrent.CompletionException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
@@ -34,7 +36,7 @@ class PrescribedVerificationCodeSenderTest {
   private static final Phonenumber.PhoneNumber NON_PRESCRIBED_CODE_NUMBER =
       PhoneNumberUtil.getInstance().getExampleNumber("DE");
 
-  private static final String VERIFICATION_CODE = RandomStringUtils.randomNumeric(6);
+  private static final String VERIFICATION_CODE = RandomStringUtils.insecure().nextNumeric(6);
 
   private PrescribedVerificationCodeSender sender;
 
@@ -55,20 +57,18 @@ class PrescribedVerificationCodeSenderTest {
   }
 
   @Test
-  void sendVerificationCode() throws InvalidProtocolBufferException {
+  void sendVerificationCode() throws InvalidProtocolBufferException, SenderRejectedRequestException {
     {
       final PrescribedVerificationCodeSessionData sessionData =
           PrescribedVerificationCodeSessionData.parseFrom(
-              sender.sendVerificationCode(MessageTransport.SMS, PRESCRIBED_CODE_NUMBER, Collections.emptyList(), ClientType.UNKNOWN).join().senderData());
+              sender.sendVerificationCode(MessageTransport.SMS, PRESCRIBED_CODE_NUMBER, Collections.emptyList(), ClientType.UNKNOWN).senderData());
 
       assertEquals(VERIFICATION_CODE, sessionData.getVerificationCode());
     }
 
     {
-      final CompletionException completionException = assertThrows(CompletionException.class, () ->
-          sender.sendVerificationCode(MessageTransport.SMS, NON_PRESCRIBED_CODE_NUMBER, Collections.emptyList(), ClientType.UNKNOWN).join());
-
-      assertTrue(completionException.getCause() instanceof SenderRejectedRequestException);
+      assertThrows(SenderRejectedRequestException.class, () ->
+          sender.sendVerificationCode(MessageTransport.SMS, NON_PRESCRIBED_CODE_NUMBER, Collections.emptyList(), ClientType.UNKNOWN));
     }
   }
 
@@ -77,13 +77,12 @@ class PrescribedVerificationCodeSenderTest {
     final byte[] sessionDataBytes =
         PrescribedVerificationCodeSessionData.newBuilder().setVerificationCode(VERIFICATION_CODE).build().toByteArray();
 
-    assertTrue(sender.checkVerificationCode(VERIFICATION_CODE, sessionDataBytes).join());
-    assertFalse(sender.checkVerificationCode(VERIFICATION_CODE + "-incorrect", sessionDataBytes).join());
+    assertTrue(sender.checkVerificationCode(VERIFICATION_CODE, sessionDataBytes));
+    assertFalse(sender.checkVerificationCode(VERIFICATION_CODE + "-incorrect", sessionDataBytes));
 
-    final CompletionException completionException =
-        assertThrows(CompletionException.class,
-            () -> sender.checkVerificationCode(VERIFICATION_CODE, new byte[16]).join());
+    final UncheckedIOException uncheckedIOException = assertThrows(UncheckedIOException.class,
+        () -> sender.checkVerificationCode(VERIFICATION_CODE, new byte[16]));
 
-    assertTrue(completionException.getCause() instanceof InvalidProtocolBufferException);
+    assertInstanceOf(InvalidProtocolBufferException.class, uncheckedIOException.getCause());
   }
 }

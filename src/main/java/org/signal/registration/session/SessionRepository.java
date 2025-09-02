@@ -8,8 +8,6 @@ package org.signal.registration.session;
 import com.google.i18n.phonenumbers.Phonenumber;
 import java.time.Instant;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
 
 /**
@@ -22,26 +20,28 @@ import java.util.function.Function;
 public interface SessionRepository {
 
   /**
-   * Asynchronously stores a new registration session.
+   * Stores a new registration session.
    *
    * @param phoneNumber the phone number to be verified as part of this registration session
    * @param sessionMetadata additional metadata to store as part of this session
    * @param expiration the time at which this newly-created session expires
    *
-   * @return a future that yields the newly-created registration session after the session has been created and stored
+   * @return the newly-created registration session
    */
-  CompletableFuture<RegistrationSession> createSession(Phonenumber.PhoneNumber phoneNumber,
-      SessionMetadata sessionMetadata, Instant expiration);
+  RegistrationSession createSession(Phonenumber.PhoneNumber phoneNumber,
+      SessionMetadata sessionMetadata,
+      Instant expiration);
 
   /**
    * Returns the registration session associated with the given session identifier.
    *
    * @param sessionId the identifier of the session to retrieve
    *
-   * @return a future that yields the session stored with the given session identifier or fails with a
-   * {@link SessionNotFoundException} if no session was found for the given identifier
+   * @return the session stored with the given session identifier
+   *
+   * @throws SessionNotFoundException if no session was found for the given identifier
    */
-  CompletableFuture<RegistrationSession> getSession(UUID sessionId);
+  RegistrationSession getSession(UUID sessionId) throws SessionNotFoundException;
 
   /**
    * Updates the session with the given identifier with the given session update function. Updates may fail if the
@@ -54,9 +54,10 @@ public interface SessionRepository {
    * @param sessionId the identifier of the session to update
    * @param sessionUpdater a function that accepts an existing session and returns a new session with changes applied
    *
-   * @return a future that yields the updated session when the update has been applied and stored; may fail with a
-   * {@link SessionNotFoundException} if no session is found for the given identifier
+   * @return the updated session
+   *
+   * @throws SessionNotFoundException if no session is found for the given identifier
    */
-  CompletableFuture<RegistrationSession> updateSession(UUID sessionId,
-      Function<RegistrationSession, CompletionStage<RegistrationSession>> sessionUpdater);
+  RegistrationSession updateSession(UUID sessionId,
+      Function<RegistrationSession, RegistrationSession> sessionUpdater) throws SessionNotFoundException;
 }

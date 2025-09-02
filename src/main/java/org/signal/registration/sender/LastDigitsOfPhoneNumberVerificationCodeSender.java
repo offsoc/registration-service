@@ -10,13 +10,12 @@ import com.google.i18n.phonenumbers.Phonenumber;
 import io.micronaut.context.annotation.Requires;
 import io.micronaut.context.env.Environment;
 import jakarta.inject.Singleton;
-import org.signal.registration.Environments;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
+import org.signal.registration.Environments;
 
 /**
  * A trivial verification code "sender" that never actually sends codes, but instead always uses the last six digits of
@@ -51,18 +50,17 @@ public class LastDigitsOfPhoneNumberVerificationCodeSender implements Verificati
   }
 
   @Override
-  public CompletableFuture<AttemptData> sendVerificationCode(final MessageTransport messageTransport,
-                                                             final Phonenumber.PhoneNumber phoneNumber,
-                                                             final List<Locale.LanguageRange> languageRanges,
-                                                             final ClientType clientType) {
+  public AttemptData sendVerificationCode(final MessageTransport messageTransport,
+      final Phonenumber.PhoneNumber phoneNumber,
+      final List<Locale.LanguageRange> languageRanges,
+      final ClientType clientType) {
 
-        return CompletableFuture.completedFuture(
-            new AttemptData(Optional.empty(), getVerificationCode(phoneNumber).getBytes(StandardCharsets.UTF_8)));
+        return new AttemptData(Optional.empty(), getVerificationCode(phoneNumber).getBytes(StandardCharsets.UTF_8));
   }
 
   @Override
-  public CompletableFuture<Boolean> checkVerificationCode(final String verificationCode, final byte[] senderData) {
-    return CompletableFuture.completedFuture(verificationCode.equals(new String(senderData, StandardCharsets.UTF_8)));
+  public boolean checkVerificationCode(final String verificationCode, final byte[] senderData) {
+    return verificationCode.equals(new String(senderData, StandardCharsets.UTF_8));
   }
 
   public static String getVerificationCode(final Phonenumber.PhoneNumber phoneNumber) {

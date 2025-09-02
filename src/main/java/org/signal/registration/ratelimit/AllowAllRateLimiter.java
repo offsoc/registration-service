@@ -25,12 +25,11 @@ class AllowAllRateLimiter<K> implements RateLimiter<K> {
   }
 
   @Override
-  public CompletableFuture<Optional<Instant>> getTimeOfNextAction(final K key) {
-    return CompletableFuture.completedFuture(Optional.of(clock.instant()));
+  public Optional<Instant> getTimeOfNextAction(final K key) {
+    return Optional.of(clock.instant());
   }
 
   @Override
-  public CompletableFuture<Void> checkRateLimit(final K key) {
-    return CompletableFuture.completedFuture(null);
+  public void checkRateLimit(final K key) {
   }
 }
