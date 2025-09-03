@@ -7,7 +7,6 @@ package org.signal.registration.sender.prescribed;
 
 import com.google.i18n.phonenumbers.Phonenumber;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
 
 /**
  * A prescribed verification code repository stores and retrieves prescribed verification codes for a set of
@@ -20,8 +19,7 @@ public interface PrescribedVerificationCodeRepository {
   /**
    * Retrieves a map of all phone numbers with prescribed verification codes to their prescribed verification codes.
    *
-   * @return a future that yields a map of all phone numbers with prescribed verification codes to their prescribed
-   * verification codes
+   * @return a map of all phone numbers with prescribed verification codes to their prescribed verification codes
    */
-  CompletableFuture<Map<Phonenumber.PhoneNumber, String>> getVerificationCodes();
+  Map<Phonenumber.PhoneNumber, String> getVerificationCodes();
 }

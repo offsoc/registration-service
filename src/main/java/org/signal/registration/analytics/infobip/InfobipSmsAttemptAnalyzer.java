@@ -12,10 +12,21 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tags;
 import io.micronaut.context.annotation.Value;
 import io.micronaut.context.event.ApplicationEventPublisher;
-import io.micronaut.scheduling.TaskExecutors;
 import io.micronaut.scheduling.annotation.Scheduled;
-import jakarta.inject.Named;
 import jakarta.inject.Singleton;
+import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Currency;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+import javax.annotation.Nullable;
 import org.apache.arrow.util.VisibleForTesting;
 import org.signal.registration.analytics.AttemptAnalysis;
 import org.signal.registration.analytics.AttemptAnalyzedEvent;
@@ -25,22 +36,8 @@ import org.signal.registration.analytics.Money;
 import org.signal.registration.cli.bigtable.BigtableInfobipDefaultSmsPricesRepository;
 import org.signal.registration.metrics.MetricsUtil;
 import org.signal.registration.sender.infobip.classic.InfobipSmsSender;
-import org.signal.registration.util.CompletionExceptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
-import reactor.util.retry.Retry;
-
-import javax.annotation.Nullable;
-import java.math.BigDecimal;
-import java.time.Clock;
-import java.time.Duration;
-import java.time.Instant;
-import java.util.*;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executor;
-import java.util.stream.Collectors;
 
 @Singleton
 class InfobipSmsAttemptAnalyzer {
@@ -49,14 +46,14 @@ class InfobipSmsAttemptAnalyzer {
   private final Clock clock;
 
   private final SmsApi infobipSmsApiClient;
-  private final Executor executor;
   private final BigtableInfobipDefaultSmsPricesRepository defaultSmsPricesRepository;
   private final Currency defaultPriceCurrency;
   private final MeterRegistry meterRegistry;
   private final int pageSize;
+
   private static final Logger logger = LoggerFactory.getLogger(InfobipSmsAttemptAnalyzer.class);
   private static final int MIN_MCC_MNC_LENGTH = 5;
-  private static final int MAX_RETRIES = 10;
+  private static final int MAX_ATTEMPTS = 10;
   private static final Duration MIN_BACKOFF = Duration.ofMillis(500);
   private static final Duration MAX_BACKOFF = Duration.ofSeconds(60);
   private static final Duration PRICING_DEADLINE = Duration.ofHours(36);
@@ -67,7 +64,6 @@ class InfobipSmsAttemptAnalyzer {
       final ApplicationEventPublisher<AttemptAnalyzedEvent> attemptAnalyzedEventPublisher,
       final Clock clock,
       final SmsApi infobipSmsApiClient,
-      @Named(TaskExecutors.IO) final Executor executor,
       final BigtableInfobipDefaultSmsPricesRepository defaultSmsPricesRepository,
       @Value("${analytics.infobip.sms.default-price-currency:USD}") final String defaultPriceCurrency,
       final MeterRegistry meterRegistry,
@@ -76,7 +72,6 @@ class InfobipSmsAttemptAnalyzer {
     this.attemptAnalyzedEventPublisher = attemptAnalyzedEventPublisher;
     this.clock = clock;
     this.infobipSmsApiClient = infobipSmsApiClient;
-    this.executor = executor;
     this.defaultSmsPricesRepository = defaultSmsPricesRepository;
     this.defaultPriceCurrency = Currency.getInstance(defaultPriceCurrency);
     this.meterRegistry = meterRegistry;
@@ -88,70 +83,115 @@ class InfobipSmsAttemptAnalyzer {
     // Infobip's message logs API (https://www.infobip.com/docs/api/channels/sms/sms-messaging/logs-and-status-reports/get-outbound-sms-message-logs)
     // has a ratelimit that prevents us from querying one by one for each attempt pending analysis.
     // Instead, we fetch fewer, larger pages and reconcile them against what we have stored locally.
-    Flux.from(repository.getBySender(InfobipSmsSender.SENDER_NAME))
-        .buffer(pageSize)
-        .flatMap(attemptsPendingAnalysis -> fetchSmsLogsWithBackoff(attemptsPendingAnalysis.stream().map(AttemptPendingAnalysis::getRemoteId).toList())
-            .flatMapMany(smsLogsByRemoteId -> Flux.fromIterable(attemptsPendingAnalysis)
-                .map(attemptPendingAnalysis -> {
-                  final AttemptAnalysis attemptAnalysis;
+    final List<AttemptPendingAnalysis> buffer = new ArrayList<>(pageSize);
+    final Iterator<AttemptPendingAnalysis> attemptsPendingAnalysis =
+        repository.getBySender(InfobipSmsSender.SENDER_NAME).iterator();
 
-                  if (smsLogsByRemoteId.containsKey(attemptPendingAnalysis.getRemoteId())) {
-                    final SmsLog smsLog = smsLogsByRemoteId.get(attemptPendingAnalysis.getRemoteId());
-                    final MccMnc mccMnc = MccMnc.fromString(smsLog.getMccMnc());
-                    final Optional<Money> maybeEstimatedPriceByMccMnc = estimatePrice(mccMnc.toString());
+    while (attemptsPendingAnalysis.hasNext()) {
+      buffer.add(attemptsPendingAnalysis.next());
 
-                    attemptAnalysis = new AttemptAnalysis(
-                        extractPrice(smsLog),
-                        maybeEstimatedPriceByMccMnc.or(() -> estimatePrice(attemptPendingAnalysis.getRegion())),
-                        Optional.ofNullable(mccMnc.mcc),
-                        Optional.ofNullable(mccMnc.mnc));
-                  } else {
-                    attemptAnalysis = new AttemptAnalysis(
-                        Optional.empty(),
-                        estimatePrice(attemptPendingAnalysis.getRegion()),
-                        Optional.empty(),
-                        Optional.empty());
-                  }
-
-                  return new AttemptAnalyzedEvent(attemptPendingAnalysis, attemptAnalysis);
-                })), Runtime.getRuntime().availableProcessors())
-        .filter(attemptAnalyzedEvent -> {
-          final Instant attemptTimestamp = Instant.ofEpochMilli(attemptAnalyzedEvent.attemptPendingAnalysis().getTimestampEpochMillis());
-          final boolean pricingDeadlineExpired = clock.instant().isAfter(attemptTimestamp.plus(PRICING_DEADLINE));
-
-          return attemptAnalyzedEvent.attemptAnalysis().price().isPresent() || pricingDeadlineExpired;
-        })
-        .subscribe(attemptAnalyzedEvent -> {
-          meterRegistry.counter(MetricsUtil.name(getClass(), "attemptAnalyzed"),
-              "hasPrice", String.valueOf(attemptAnalyzedEvent.attemptAnalysis().price().isPresent())).increment();
-          repository.remove(attemptAnalyzedEvent.attemptPendingAnalysis());
-          attemptAnalyzedEventPublisher.publishEvent(attemptAnalyzedEvent);
-        });
-  }
-
-  private Mono<Map<String, SmsLog>> fetchSmsLogsWithBackoff(final List<String> remoteIds) {
-    return Mono.fromFuture(() -> getSmsLogs(remoteIds))
-        .retryWhen(Retry.backoff(MAX_RETRIES, MIN_BACKOFF)
-            .filter(throwable -> CompletionExceptions.unwrap(throwable) instanceof ApiException apiException &&
-                apiException.responseStatusCode() == HTTP_TOO_MANY_REQUESTS_CODE)
-            .maxBackoff(MAX_BACKOFF))
-        .map(smsLogs -> smsLogs.stream().collect(Collectors.toMap(SmsLog::getMessageId, smsLog -> smsLog)));
-  }
-
-  private CompletableFuture<List<SmsLog>> getSmsLogs(final List<String> remoteIds) {
-    return CompletableFuture.supplyAsync(() -> {
-      try {
-        final List<SmsLog> smsLogs = infobipSmsApiClient.getOutboundSmsMessageLogs().messageId(remoteIds).execute().getResults();
-        meterRegistry.counter(MetricsUtil.name(getClass(), "getSmsLogs")).increment(smsLogs.size());
-        return smsLogs;
-      } catch (ApiException e) {
-        Tags tags = Tags.of("statusCode", String.valueOf(e.responseStatusCode()));
-        if (e.details() != null) {
-          tags = tags.and("error", e.details().getDescription());
+      if (buffer.size() == pageSize) {
+        try {
+          analyzeAttempts(buffer);
+        } catch (final ApiException e) {
+          logger.warn("Failed to analyze attempts", e);
+        } finally {
+          buffer.clear();
         }
-        meterRegistry.counter(MetricsUtil.name(getClass(), "infobipException"), tags).increment();
-        throw CompletionExceptions.wrap(e);
-      }}, executor);
+      }
+    }
+
+    if (!buffer.isEmpty()) {
+      try {
+        analyzeAttempts(buffer);
+      } catch (ApiException e) {
+        logger.warn("Failed to analyze attempts", e);
+      }
+    }
+  }
+
+  private void analyzeAttempts(final List<AttemptPendingAnalysis> attemptsPendingAnalysis) throws ApiException {
+    final Map<String, SmsLog> smsLogsByRemoteId =
+        fetchSmsLogsWithBackoff(attemptsPendingAnalysis.stream().map(AttemptPendingAnalysis::getRemoteId).toList());
+
+    for (final AttemptPendingAnalysis attemptPendingAnalysis : attemptsPendingAnalysis) {
+      final AttemptAnalysis attemptAnalysis;
+
+      if (smsLogsByRemoteId.containsKey(attemptPendingAnalysis.getRemoteId())) {
+        final SmsLog smsLog = smsLogsByRemoteId.get(attemptPendingAnalysis.getRemoteId());
+        final MccMnc mccMnc = MccMnc.fromString(smsLog.getMccMnc());
+        final Optional<Money> maybeEstimatedPriceByMccMnc = estimatePrice(mccMnc.toString());
+
+        attemptAnalysis = new AttemptAnalysis(
+            extractPrice(smsLog),
+            maybeEstimatedPriceByMccMnc.or(() -> estimatePrice(attemptPendingAnalysis.getRegion())),
+            Optional.ofNullable(mccMnc.mcc),
+            Optional.ofNullable(mccMnc.mnc));
+      } else {
+        attemptAnalysis = new AttemptAnalysis(
+            Optional.empty(),
+            estimatePrice(attemptPendingAnalysis.getRegion()),
+            Optional.empty(),
+            Optional.empty());
+      }
+
+      final Instant attemptTimestamp = Instant.ofEpochMilli(attemptPendingAnalysis.getTimestampEpochMillis());
+      final boolean pricingDeadlineExpired = clock.instant().isAfter(attemptTimestamp.plus(PRICING_DEADLINE));
+
+      if (attemptAnalysis.price().isPresent() || pricingDeadlineExpired) {
+        meterRegistry.counter(MetricsUtil.name(getClass(), "attemptAnalyzed"),
+            "hasPrice", String.valueOf(attemptAnalysis.price().isPresent())).increment();
+        repository.remove(attemptPendingAnalysis);
+        attemptAnalyzedEventPublisher.publishEvent(new AttemptAnalyzedEvent(attemptPendingAnalysis, attemptAnalysis));
+      }
+    }
+  }
+
+  private Map<String, SmsLog> fetchSmsLogsWithBackoff(final List<String> remoteIds) throws ApiException {
+    Duration backoffDelay = MIN_BACKOFF;
+    ApiException lastException = null;
+
+    for (int attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      try {
+        final List<SmsLog> smsLogs = getSmsLogs(remoteIds);
+        return smsLogs.stream().collect(Collectors.toMap(SmsLog::getMessageId, Function.identity()));
+      } catch (final ApiException e) {
+        lastException = e;
+
+        if (e.responseStatusCode() == HTTP_TOO_MANY_REQUESTS_CODE) {
+          try {
+            Thread.sleep(backoffDelay);
+          } catch (final InterruptedException ignored) {
+          }
+
+          backoffDelay = backoffDelay.multipliedBy(2);
+
+          if (backoffDelay.compareTo(MAX_BACKOFF) > 0) {
+            backoffDelay = MAX_BACKOFF;
+          }
+        } else {
+          throw e;
+        }
+      }
+    }
+
+    throw lastException;
+  }
+
+  private List<SmsLog> getSmsLogs(final List<String> remoteIds) throws ApiException {
+    try {
+      final List<SmsLog> smsLogs = infobipSmsApiClient.getOutboundSmsMessageLogs().messageId(remoteIds).execute().getResults();
+      meterRegistry.counter(MetricsUtil.name(getClass(), "getSmsLogs")).increment(smsLogs.size());
+      return smsLogs;
+    } catch (final ApiException e) {
+      Tags tags = Tags.of("statusCode", String.valueOf(e.responseStatusCode()));
+      if (e.details() != null) {
+        tags = tags.and("error", e.details().getDescription());
+      }
+      meterRegistry.counter(MetricsUtil.name(getClass(), "infobipException"), tags).increment();
+
+      throw e;
+    }
   }
 
   private Optional<Money> extractPrice(final SmsLog smsLog) {

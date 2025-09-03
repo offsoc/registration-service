@@ -21,13 +21,9 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadLocalRandom;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.Collectors;
 import org.apache.commons.lang3.RandomStringUtils;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -36,13 +32,11 @@ import org.signal.registration.analytics.AttemptPendingAnalysis;
 import org.signal.registration.rpc.ClientType;
 import org.signal.registration.rpc.MessageTransport;
 import org.signal.registration.util.UUIDUtil;
-import reactor.core.publisher.Flux;
 
 class BigtableAttemptPendingAnalysisRepositoryTest {
 
   private Emulator emulator;
   private BigtableDataClient bigtableDataClient;
-  private ExecutorService executorService;
 
   private BigtableAttemptPendingAnalysisRepository repository;
 
@@ -73,22 +67,14 @@ class BigtableAttemptPendingAnalysisRepositoryTest {
         .setInstanceId(INSTANCE_ID)
         .build());
 
-    executorService = Executors.newSingleThreadExecutor();
-
     repository = new BigtableAttemptPendingAnalysisRepository(bigtableDataClient,
-        executorService,
         new BigtableAttemptPendingAnalysisRepositoryConfiguration(TABLE_ID, COLUMN_FAMILY_NAME), new SimpleMeterRegistry());
   }
 
   @AfterEach
-  void tearDown() throws InterruptedException {
+  void tearDown() {
     bigtableDataClient.close();
     emulator.stop();
-
-    executorService.shutdown();
-
-    //noinspection ResultOfMethodCallIgnored
-    executorService.awaitTermination(1, TimeUnit.SECONDS);
   }
 
   @Test
@@ -96,11 +82,11 @@ class BigtableAttemptPendingAnalysisRepositoryTest {
     final String senderName = "test";
     final AttemptPendingAnalysis attemptPendingAnalysis = buildAttemptPendingAnalysis(senderName);
 
-    assertEquals(Collections.emptyList(), Flux.from(repository.getBySender(senderName)).collectList().block());
+    assertEquals(Collections.emptyList(), repository.getBySender(senderName).toList());
 
-    repository.store(attemptPendingAnalysis).join();
+    repository.store(attemptPendingAnalysis);
 
-    assertEquals(List.of(attemptPendingAnalysis), Flux.from(repository.getBySender(senderName)).collectList().block());
+    assertEquals(List.of(attemptPendingAnalysis), repository.getBySender(senderName).toList());
   }
 
   @Test
@@ -108,10 +94,10 @@ class BigtableAttemptPendingAnalysisRepositoryTest {
     final String senderName = "test";
     final AttemptPendingAnalysis attemptPendingAnalysis = buildAttemptPendingAnalysis(senderName);
 
-    assertDoesNotThrow(() -> repository.store(attemptPendingAnalysis).join());
-    assertDoesNotThrow(() -> repository.store(attemptPendingAnalysis).join());
+    assertDoesNotThrow(() -> repository.store(attemptPendingAnalysis));
+    assertDoesNotThrow(() -> repository.store(attemptPendingAnalysis));
 
-    assertEquals(List.of(attemptPendingAnalysis), Flux.from(repository.getBySender(senderName)).collectList().block());
+    assertEquals(List.of(attemptPendingAnalysis), repository.getBySender(senderName).toList());
   }
 
   @Test
@@ -122,16 +108,15 @@ class BigtableAttemptPendingAnalysisRepositoryTest {
     for (int i = 0; i < 10; i++) {
       final AttemptPendingAnalysis attemptPendingAnalysis = buildAttemptPendingAnalysis(sender);
 
-      repository.store(attemptPendingAnalysis).join();
+      repository.store(attemptPendingAnalysis);
       expectedAttemptsPendingAnalysis.add(attemptPendingAnalysis);
     }
 
     for (int i = 0; i < 10; i++) {
-      repository.store(buildAttemptPendingAnalysis(sender + "-unexpected")).join();
+      repository.store(buildAttemptPendingAnalysis(sender + "-unexpected"));
     }
 
-    assertEquals(expectedAttemptsPendingAnalysis,
-        Flux.from(repository.getBySender(sender)).collect(Collectors.toSet()).block());
+    assertEquals(expectedAttemptsPendingAnalysis, new HashSet<>(repository.getBySender(sender).toList()));
   }
 
   @Test
@@ -140,14 +125,14 @@ class BigtableAttemptPendingAnalysisRepositoryTest {
     final AttemptPendingAnalysis removedAttempt = buildAttemptPendingAnalysis(senderName);
     final AttemptPendingAnalysis remainingAttempt = buildAttemptPendingAnalysis(senderName);
 
-    assertDoesNotThrow(() -> repository.remove(remainingAttempt).join());
+    assertDoesNotThrow(() -> repository.remove(remainingAttempt));
 
-    repository.store(removedAttempt).join();
-    repository.store(remainingAttempt).join();
+    repository.store(removedAttempt);
+    repository.store(remainingAttempt);
 
-    assertDoesNotThrow(() -> repository.remove(removedAttempt).join());
+    assertDoesNotThrow(() -> repository.remove(removedAttempt));
 
-    assertEquals(List.of(remainingAttempt), Flux.from(repository.getBySender(senderName)).collectList().block());
+    assertEquals(List.of(remainingAttempt), repository.getBySender(senderName).toList());
   }
 
   private static AttemptPendingAnalysis buildAttemptPendingAnalysis(final String senderName) {
@@ -155,10 +140,10 @@ class BigtableAttemptPendingAnalysisRepositoryTest {
         .setSessionId(UUIDUtil.uuidToByteString(UUID.randomUUID()))
         .setAttemptId(ATTEMPT_ID_COUNTER.incrementAndGet())
         .setSenderName(senderName)
-        .setRemoteId(RandomStringUtils.randomAlphanumeric(16))
+        .setRemoteId(RandomStringUtils.insecure().nextAlphabetic(16))
         .setMessageTransport(ThreadLocalRandom.current().nextBoolean() ? MessageTransport.MESSAGE_TRANSPORT_SMS : MessageTransport.MESSAGE_TRANSPORT_VOICE)
         .setClientType(ClientType.CLIENT_TYPE_UNSPECIFIED)
-        .setRegion(RandomStringUtils.randomAlphabetic(2))
+        .setRegion(RandomStringUtils.insecure().nextAlphabetic(2))
         .setTimestampEpochMillis(System.currentTimeMillis())
         .setAccountExistsWithE164(ThreadLocalRandom.current().nextBoolean())
         .setVerified(ThreadLocalRandom.current().nextBoolean())

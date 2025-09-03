@@ -15,7 +15,6 @@ import java.time.Clock;
 import java.util.Currency;
 import java.util.Locale;
 import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
 import org.apache.commons.lang3.StringUtils;
 import org.signal.registration.analytics.AbstractAttemptAnalyzer;
 import org.signal.registration.analytics.AttemptAnalysis;
@@ -55,16 +54,15 @@ class TwilioVoiceAttemptAnalyzer extends AbstractAttemptAnalyzer {
   }
 
   @Override
-  protected CompletableFuture<AttemptAnalysis> analyzeAttempt(final AttemptPendingAnalysis attemptPendingAnalysis) {
-    return Call.fetcher(attemptPendingAnalysis.getRemoteId()).fetchAsync(twilioRestClient)
-        .thenApply(call -> {
-          final Optional<Money> maybePrice = StringUtils.isNotBlank(call.getPrice()) && call.getPriceUnit() != null
-              ? Optional.of(new Money(
-                  new BigDecimal(call.getPrice()).negate(),
-                  Currency.getInstance(call.getPriceUnit().getCurrencyCode().toUpperCase(Locale.ROOT))))
-              : Optional.empty();
+  protected AttemptAnalysis analyzeAttempt(final AttemptPendingAnalysis attemptPendingAnalysis) {
+    final Call call = Call.fetcher(attemptPendingAnalysis.getRemoteId()).fetch(twilioRestClient);
 
-          return new AttemptAnalysis(maybePrice, Optional.empty(), Optional.empty(), Optional.empty());
-        });
+    final Optional<Money> maybePrice = StringUtils.isNotBlank(call.getPrice()) && call.getPriceUnit() != null
+        ? Optional.of(new Money(
+        new BigDecimal(call.getPrice()).negate(),
+        Currency.getInstance(call.getPriceUnit().getCurrencyCode().toUpperCase(Locale.ROOT))))
+        : Optional.empty();
+
+    return new AttemptAnalysis(maybePrice, Optional.empty(), Optional.empty(), Optional.empty());
   }
 }

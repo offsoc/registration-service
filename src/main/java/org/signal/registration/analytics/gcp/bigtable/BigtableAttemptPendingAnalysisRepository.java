@@ -14,19 +14,13 @@ import com.google.cloud.bigtable.data.v2.models.TableId;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.InvalidProtocolBufferException;
 import io.micrometer.core.instrument.MeterRegistry;
-import io.micronaut.scheduling.TaskExecutors;
-import jakarta.inject.Named;
+import jakarta.inject.Singleton;
 import java.io.UncheckedIOException;
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executor;
-import jakarta.inject.Singleton;
-import org.reactivestreams.Publisher;
+import java.util.stream.Stream;
 import org.signal.registration.analytics.AttemptPendingAnalysis;
 import org.signal.registration.analytics.AttemptPendingAnalysisRepository;
 import org.signal.registration.metrics.MetricsUtil;
-import org.signal.registration.util.GoogleApiUtil;
-import org.signal.registration.util.ReactiveResponseObserver;
 import org.signal.registration.util.UUIDUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,7 +33,6 @@ import org.slf4j.LoggerFactory;
 public class BigtableAttemptPendingAnalysisRepository implements AttemptPendingAnalysisRepository {
 
   private final BigtableDataClient bigtableDataClient;
-  private final Executor executor;
   private final MeterRegistry meterRegistry;
 
   private final TableId tableId;
@@ -61,55 +54,49 @@ public class BigtableAttemptPendingAnalysisRepository implements AttemptPendingA
   private static final Logger logger = LoggerFactory.getLogger(BigtableAttemptPendingAnalysisRepository.class);
 
   public BigtableAttemptPendingAnalysisRepository(final BigtableDataClient bigtableDataClient,
-      @Named(TaskExecutors.IO) final Executor executor,
       final BigtableAttemptPendingAnalysisRepositoryConfiguration configuration,
       final MeterRegistry meterRegistry) {
+
     this.bigtableDataClient = bigtableDataClient;
-    this.executor = executor;
+    this.meterRegistry = meterRegistry;
 
     this.tableId = TableId.of(configuration.tableId());
     this.columnFamilyName = configuration.columnFamilyName();
-    this.meterRegistry = meterRegistry;
   }
 
   @Override
-  public CompletableFuture<Void> store(final AttemptPendingAnalysis attemptPendingAnalysis) {
-    return GoogleApiUtil.toCompletableFuture(bigtableDataClient.mutateRowAsync(
-            RowMutation.create(tableId, getKey(attemptPendingAnalysis))
-                .setCell(columnFamilyName, DATA_COLUMN_NAME, attemptPendingAnalysis.toByteString())), executor)
-        .whenComplete((ignored, throwable) -> {
-          meterRegistry.counter(STORE_ATTEMPT_COUNTER_NAME,
-                  SENDER_TAG_NAME, attemptPendingAnalysis.getSenderName())
-              .increment();
-
-          if (throwable != null) {
-            logger.warn("Failed to store attempt pending analysis", throwable);
-          }
-        });
+  public void store(final AttemptPendingAnalysis attemptPendingAnalysis) {
+    try {
+      bigtableDataClient.mutateRow(RowMutation.create(tableId, getKey(attemptPendingAnalysis))
+          .setCell(columnFamilyName, DATA_COLUMN_NAME, attemptPendingAnalysis.toByteString()));
+    } catch (final Exception e) {
+      logger.warn("Failed to store attempt pending analysis", e);
+    } finally {
+      meterRegistry.counter(STORE_ATTEMPT_COUNTER_NAME,
+              SENDER_TAG_NAME, attemptPendingAnalysis.getSenderName())
+          .increment();
+    }
   }
 
   @Override
-  public Publisher<AttemptPendingAnalysis> getBySender(final String senderName) {
-    return ReactiveResponseObserver.<Row>asFlux(responseObserver ->
-            bigtableDataClient.readRowsAsync(Query.create(tableId).prefix(getPrefix(senderName)), responseObserver))
-        .doOnNext(row -> meterRegistry.counter(GET_ATTEMPTS_BY_SENDER_COUNTER_NAME, SENDER_TAG_NAME, senderName).increment())
-        .doOnError(throwable -> logger.warn("Failed to get attempts pending analysis by sender", throwable))
+  public Stream<AttemptPendingAnalysis> getBySender(final String senderName) {
+    return bigtableDataClient.readRows(Query.create(tableId).prefix(getPrefix(senderName)))
+        .stream()
+        .peek(row -> meterRegistry.counter(GET_ATTEMPTS_BY_SENDER_COUNTER_NAME, SENDER_TAG_NAME, senderName).increment())
         .map(this::fromRow);
   }
 
   @Override
-  public CompletableFuture<Void> remove(final AttemptPendingAnalysis attemptPendingAnalysis) {
-    return GoogleApiUtil.toCompletableFuture(bigtableDataClient.mutateRowAsync(
-            RowMutation.create(tableId, getKey(attemptPendingAnalysis)).deleteRow()), executor)
-        .whenComplete((ignored, throwable) -> {
-          meterRegistry.counter(REMOVE_ATTEMPT_COUNTER_NAME,
-                  SENDER_TAG_NAME, attemptPendingAnalysis.getSenderName())
-              .increment();
-
-          if (throwable != null) {
-            logger.warn("Failed to remove attempt pending analysis", throwable);
-          }
-        });
+  public void remove(final AttemptPendingAnalysis attemptPendingAnalysis) {
+    try {
+      bigtableDataClient.mutateRow(RowMutation.create(tableId, getKey(attemptPendingAnalysis)).deleteRow());
+    } catch (final Exception e) {
+      logger.warn("Failed to remove attempt pending analysis", e);
+    } finally {
+      meterRegistry.counter(REMOVE_ATTEMPT_COUNTER_NAME,
+              SENDER_TAG_NAME, attemptPendingAnalysis.getSenderName())
+          .increment();
+    }
   }
 
   private AttemptPendingAnalysis fromRow(final Row row) {

@@ -6,6 +6,7 @@
 package org.signal.registration.analytics.messagebird;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.messagebird.exceptions.MessageBirdException;
 import com.messagebird.exceptions.NotFoundException;
 import com.messagebird.objects.MessageResponse;
 import io.micronaut.context.event.ApplicationEventPublisher;
@@ -13,7 +14,6 @@ import java.time.Clock;
 import java.util.Currency;
 import java.util.Locale;
 import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
 import org.apache.commons.lang3.StringUtils;
 import org.signal.registration.analytics.AbstractAttemptAnalyzer;
 import org.signal.registration.analytics.AttemptAnalysis;
@@ -22,7 +22,6 @@ import org.signal.registration.analytics.AttemptPendingAnalysis;
 import org.signal.registration.analytics.AttemptPendingAnalysisRepository;
 import org.signal.registration.analytics.Money;
 import org.signal.registration.analytics.PriceEstimator;
-import org.signal.registration.util.CompletionExceptions;
 
 abstract class AbstractMessageBirdAttemptAnalyzer extends AbstractAttemptAnalyzer {
 
@@ -37,19 +36,18 @@ abstract class AbstractMessageBirdAttemptAnalyzer extends AbstractAttemptAnalyze
     this.priceEstimator = priceEstimator;
   }
 
-  protected abstract CompletableFuture<MessageResponse.Recipients> getRecipients(final AttemptPendingAnalysis attemptPendingAnalysis);
+  protected abstract MessageResponse.Recipients getRecipients(final AttemptPendingAnalysis attemptPendingAnalysis) throws MessageBirdException;
 
   @Override
-  protected CompletableFuture<AttemptAnalysis> analyzeAttempt(final AttemptPendingAnalysis attemptPendingAnalysis) {
-    return getRecipients(attemptPendingAnalysis)
-        .thenApply(recipients -> extractAttemptAnalysis(recipients, attemptPendingAnalysis, priceEstimator))
-        .exceptionally(throwable -> {
-          if (CompletionExceptions.unwrap(throwable) instanceof NotFoundException) {
-            return AttemptAnalysis.EMPTY;
-          }
-
-          throw CompletionExceptions.wrap(throwable);
-        });
+  protected AttemptAnalysis analyzeAttempt(final AttemptPendingAnalysis attemptPendingAnalysis) {
+    try {
+      return extractAttemptAnalysis(getRecipients(attemptPendingAnalysis), attemptPendingAnalysis, priceEstimator);
+    } catch (final NotFoundException ignored) {
+      return AttemptAnalysis.EMPTY;
+    } catch (final MessageBirdException e) {
+      // TODO Log
+      throw new RuntimeException(e);
+    }
   }
 
   @VisibleForTesting

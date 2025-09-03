@@ -5,9 +5,19 @@
 
 package org.signal.registration.analytics;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+
 import com.google.i18n.phonenumbers.PhoneNumberUtil;
 import com.google.i18n.phonenumbers.Phonenumber;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
+import javax.annotation.Nullable;
 import org.apache.commons.lang3.RandomStringUtils;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -20,18 +30,6 @@ import org.signal.registration.session.SessionCompletedEvent;
 import org.signal.registration.session.SessionMetadata;
 import org.signal.registration.util.UUIDUtil;
 
-import javax.annotation.Nullable;
-import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ThreadLocalRandom;
-
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
-
 class AttemptPendingAnalysisEventListenerTest {
 
   private AttemptPendingAnalysisRepository repository;
@@ -40,8 +38,6 @@ class AttemptPendingAnalysisEventListenerTest {
   @BeforeEach
   void setUp() {
     repository = mock(AttemptPendingAnalysisRepository.class);
-    when(repository.store(any())).thenReturn(CompletableFuture.completedFuture(null));
-
     listener = new AttemptPendingAnalysisEventListener(repository, new SimpleMeterRegistry());
   }
 
@@ -50,13 +46,13 @@ class AttemptPendingAnalysisEventListenerTest {
     final UUID sessionId = UUID.randomUUID();
     final Phonenumber.PhoneNumber phoneNumber = PhoneNumberUtil.getInstance().getExampleNumber("US");
 
-    final String firstRemoteId = RandomStringUtils.randomAlphabetic(16);
-    final String secondRemoteId = RandomStringUtils.randomAlphabetic(16);
+    final String firstRemoteId = RandomStringUtils.insecure().nextAlphabetic(16);
+    final String secondRemoteId = RandomStringUtils.insecure().nextAlphabetic(16);
 
     final RegistrationSession registrationSession = RegistrationSession.newBuilder()
         .setId(UUIDUtil.uuidToByteString(sessionId))
         .setPhoneNumber(PhoneNumberUtil.getInstance().format(phoneNumber, PhoneNumberUtil.PhoneNumberFormat.E164))
-        .setVerifiedCode(RandomStringUtils.randomNumeric(6))
+        .setVerifiedCode(RandomStringUtils.insecure().nextNumeric(6))
         .setSessionMetadata(SessionMetadata.newBuilder().setAccountExistsWithE164(true).build())
         .addRegistrationAttempts(buildRegistrationAttempt(firstRemoteId))
         .addRegistrationAttempts(buildRegistrationAttempt(null))
@@ -71,7 +67,7 @@ class AttemptPendingAnalysisEventListenerTest {
     verify(repository, times(2)).store(attemptPendingAnalysisCaptor.capture());
 
     {
-      final AttemptPendingAnalysis attemptPendingAnalysis = attemptPendingAnalysisCaptor.getAllValues().get(0);
+      final AttemptPendingAnalysis attemptPendingAnalysis = attemptPendingAnalysisCaptor.getAllValues().getFirst();
       assertEquals(UUIDUtil.uuidToByteString(sessionId), attemptPendingAnalysis.getSessionId());
       assertEquals(firstRemoteId, attemptPendingAnalysis.getRemoteId());
       assertFalse(attemptPendingAnalysis.getVerified());

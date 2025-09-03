@@ -10,12 +10,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import com.google.cloud.NoCredentials;
 import com.google.cloud.firestore.Firestore;
 import com.google.cloud.firestore.FirestoreOptions;
-import com.google.common.util.concurrent.MoreExecutors;
 import com.google.i18n.phonenumbers.PhoneNumberUtil;
 import com.google.i18n.phonenumbers.Phonenumber;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.FirestoreEmulatorContainer;
@@ -53,10 +52,7 @@ class FirestorePrescribedVerificationCodeRepositoryTest {
         .build()
         .getService();
 
-    repository = new FirestorePrescribedVerificationCodeRepository(firestore,
-        MoreExecutors.directExecutor(),
-        configuration,
-        new SimpleMeterRegistry());
+    repository = new FirestorePrescribedVerificationCodeRepository(firestore, configuration, new SimpleMeterRegistry());
   }
 
   @Test
@@ -92,6 +88,6 @@ class FirestorePrescribedVerificationCodeRepositoryTest {
         .set(Map.of(FirestorePrescribedVerificationCodeRepository.VERIFICATION_CODE_KEY + "-incorrect", "987654"))
         .get();
 
-    assertEquals(expectedVerificationCodes, repository.getVerificationCodes().join());
+    assertEquals(expectedVerificationCodes, repository.getVerificationCodes());
   }
 }

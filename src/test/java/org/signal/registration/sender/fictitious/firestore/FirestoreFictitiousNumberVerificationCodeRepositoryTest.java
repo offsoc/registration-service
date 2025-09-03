@@ -22,7 +22,6 @@ import java.time.temporal.ChronoUnit;
 import java.util.concurrent.ExecutionException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.signal.registration.util.GoogleApiUtil;
 import org.testcontainers.containers.FirestoreEmulatorContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -85,7 +84,7 @@ class FirestoreFictitiousNumberVerificationCodeRepositoryTest {
     assertEquals(verificationCode,
         documentSnapshot.get(FirestoreFictitiousNumberVerificationCodeRepository.VERIFICATION_CODE_KEY));
 
-    assertEquals(GoogleApiUtil.timestampFromInstant(CURRENT_TIME.plus(ttl)),
+    assertEquals(FirestoreFictitiousNumberVerificationCodeRepository.timestampFromInstant(CURRENT_TIME.plus(ttl)),
         documentSnapshot.get(EXPIRATION_FIELD_NAME));
   }
 }

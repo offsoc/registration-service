@@ -12,9 +12,7 @@ import com.google.i18n.phonenumbers.Phonenumber;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tags;
 import io.micronaut.context.annotation.Requires;
-import io.micronaut.scheduling.TaskExecutors;
 import io.micronaut.scheduling.annotation.Scheduled;
-import jakarta.inject.Named;
 import jakarta.inject.Singleton;
 import java.time.Duration;
 import java.time.Instant;
@@ -26,8 +24,6 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.Executor;
 import java.util.function.Function;
 import java.util.function.ToDoubleFunction;
 import java.util.stream.Collectors;
@@ -74,10 +70,9 @@ public class BigQueryVerificationStatsProvider implements VerificationStatsProvi
 
   private static class Updater {
 
-    private final Executor executor;
     private final BigQuery bigQuery;
     private final MessageTransport messageTransport;
-    private String tableName;
+    private final String tableName;
     private final Duration windowSize;
     private final MeterRegistry meterRegistry;
     private final Map<Pair<String, String>, VerificationStats> currentStats;
@@ -86,13 +81,11 @@ public class BigQueryVerificationStatsProvider implements VerificationStatsProvi
     volatile private Map<String, Map<String, VerificationStats>> senderStatsByRegion;
 
     public Updater(
-        final Executor executor,
         final BigQuery bigQuery,
         final MessageTransport messageTransport,
         final String tableName,
         final Duration windowSize,
         final MeterRegistry meterRegistry) {
-      this.executor = executor;
       this.bigQuery = bigQuery;
       this.messageTransport = messageTransport;
       this.tableName = tableName;
@@ -104,15 +97,14 @@ public class BigQueryVerificationStatsProvider implements VerificationStatsProvi
       this.senderStatsByRegion = Collections.emptyMap();
     }
 
-    private CompletableFuture<Void> refreshStats() {
-      return runQuery()
-          .thenApply(o -> o.map(this::processTableResult))
-          .thenAccept(opt -> {
-            if (opt.isPresent()) {
-              senderStatsByRegion = opt.get();
-              logUpdate(senderStatsByRegion, !initialized);
-              initialized = true;
-            } else if (!initialized) {
+    private void refreshStats() {
+      runQuery().map(this::processTableResult).ifPresentOrElse(senderStatsByRegion -> {
+            this.senderStatsByRegion = senderStatsByRegion;
+            logUpdate(senderStatsByRegion, !initialized);
+            this.initialized = true;
+          },
+          () -> {
+            if (!initialized) {
               log.error("failed to initialize bandit stats for {}", this.messageTransport);
             }
           });
@@ -123,51 +115,49 @@ public class BigQueryVerificationStatsProvider implements VerificationStatsProvi
           MessageTransports.getRpcMessageTransportFromSenderTransport(messageTransport));
     }
 
-    private CompletableFuture<Optional<TableResult>> runQuery() {
-      return CompletableFuture.supplyAsync(() -> {
-        final QueryParameterValue windowStart = QueryParameterValue.timestamp(
-            // Timestamp takes microseconds since epoch
-            Instant.now().minus(windowSize).toEpochMilli() * 1000L);
+    private Optional<TableResult> runQuery() {
+      final QueryParameterValue windowStart = QueryParameterValue.timestamp(
+          // Timestamp takes microseconds since epoch
+          Instant.now().minus(windowSize).toEpochMilli() * 1000L);
 
-        final QueryParameterValue transport = QueryParameterValue.string(messageTransportColumnVal(messageTransport));
-        final JobId jobId = JobId.of(UUID.randomUUID().toString());
+      final QueryParameterValue transport = QueryParameterValue.string(messageTransportColumnVal(messageTransport));
+      final JobId jobId = JobId.of(UUID.randomUUID().toString());
 
-        // Fetch the success/failure counts by region for the provided time window. Filter to only the first attempt in
-        // each session. Since we use a different selection strategy when making multiple attempts on the same session,
-        // bias is introduced in the data. If a provider mostly receives only "second" attempts, (which are likely
-        // for numbers that are facing deliverability problems to begin with) their performance might be worse than if
-        // they were receiving a random sample of requests.
-        final QueryJobConfiguration queryConfig = QueryJobConfiguration.newBuilder("""
-                SELECT
-                  sender_name,
-                  region,
-                  SUM(CAST(verified as integer)) as successes,
-                  SUM(1) as total
-                FROM `%s`
-                WHERE timestamp > @window_start_ts
-                AND message_transport = @message_transport
-                AND attempt_id = 0
-                GROUP BY sender_name, region;
-                """.formatted(tableName))
-            .addNamedParameter("window_start_ts", windowStart)
-            .addNamedParameter("message_transport", transport)
-            .setUseLegacySql(false)
-            .build();
-        final JobInfo jobInfo = JobInfo.newBuilder(queryConfig).setJobId(jobId).build();
-        final Job job = bigQuery.create(jobInfo);
+      // Fetch the success/failure counts by region for the provided time window. Filter to only the first attempt in
+      // each session. Since we use a different selection strategy when making multiple attempts on the same session,
+      // bias is introduced in the data. If a provider mostly receives only "second" attempts, (which are likely
+      // for numbers that are facing deliverability problems to begin with) their performance might be worse than if
+      // they were receiving a random sample of requests.
+      final QueryJobConfiguration queryConfig = QueryJobConfiguration.newBuilder("""
+              SELECT
+                sender_name,
+                region,
+                SUM(CAST(verified as integer)) as successes,
+                SUM(1) as total
+              FROM `%s`
+              WHERE timestamp > @window_start_ts
+              AND message_transport = @message_transport
+              AND attempt_id = 0
+              GROUP BY sender_name, region;
+              """.formatted(tableName))
+          .addNamedParameter("window_start_ts", windowStart)
+          .addNamedParameter("message_transport", transport)
+          .setUseLegacySql(false)
+          .build();
+      final JobInfo jobInfo = JobInfo.newBuilder(queryConfig).setJobId(jobId).build();
+      final Job job = bigQuery.create(jobInfo);
 
-        try {
-          if (job.waitFor().isDone()) {
-            return Optional.of(job.getQueryResults());
-          } else {
-            log.warn("job did not finish");
-            return Optional.empty();
-          }
-        } catch (InterruptedException e) {
-          log.warn("job interrupted: %s", e);
+      try {
+        if (job.waitFor().isDone()) {
+          return Optional.of(job.getQueryResults());
+        } else {
+          log.warn("job did not finish");
           return Optional.empty();
         }
-      }, executor);
+      } catch (InterruptedException e) {
+        log.warn("job interrupted: %s", e);
+        return Optional.empty();
+      }
     }
 
     private Map<String, Map<String, VerificationStats>> processTableResult(final TableResult result) {
@@ -207,30 +197,26 @@ public class BigQueryVerificationStatsProvider implements VerificationStatsProvi
   private final EnumMap<MessageTransport, Updater> updaterByTransport;
 
   public BigQueryVerificationStatsProvider(
-      @Named(TaskExecutors.IO) final Executor executor,
       final BigQuery bigQuery,
       final VerificationStatsConfiguration config,
       final MeterRegistry meterRegistry) {
+
     this.updaterByTransport = new EnumMap<>(Arrays.stream(MessageTransport.values()).collect(Collectors.toMap(
         Function.identity(),
-        mt -> new Updater(executor, bigQuery, mt, config.tableName(), config.windowSize(), meterRegistry))));
+        mt -> new Updater(bigQuery, mt, config.tableName(), config.windowSize(), meterRegistry))));
+
     this.updaterByTransport.forEach((messageTransport, updater) ->
         meterRegistry.gauge(REGION_COUNT_GAUGE_NAME,
             Tags.of(MetricsUtil.TRANSPORT_TAG_NAME, messageTransport.name()),
             updater, u -> u.senderStatsByRegion.size()));
   }
 
-  private CompletableFuture<Void> loadProviderStatistics() {
-    return CompletableFuture.allOf(updaterByTransport
-        .values().stream()
-        .map(Updater::refreshStats)
-        .toList()
-        .toArray(CompletableFuture[]::new));
+  private void loadProviderStatistics() {
+    updaterByTransport.values().forEach(Updater::refreshStats);
   }
-
 
   @Scheduled(initialDelay = "5s", fixedDelay = "5m")
   void internalUpdate() {
-    loadProviderStatistics().join();
+    loadProviderStatistics();
   }
 }

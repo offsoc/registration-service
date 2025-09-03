@@ -5,6 +5,7 @@
 
 package org.signal.registration.sender.fictitious.firestore;
 
+import com.google.cloud.Timestamp;
 import com.google.cloud.firestore.Firestore;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.i18n.phonenumbers.PhoneNumberUtil;
@@ -15,11 +16,11 @@ import io.micronaut.context.annotation.Requires;
 import jakarta.inject.Singleton;
 import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import org.signal.registration.metrics.MetricsUtil;
 import org.signal.registration.sender.fictitious.FictitiousNumberVerificationCodeRepository;
-import org.signal.registration.util.GoogleApiUtil;
 
 @Requires(bean = Firestore.class)
 @Singleton
@@ -58,12 +59,17 @@ class FirestoreFictitiousNumberVerificationCodeRepository implements FictitiousN
       firestore.collection(configuration.getCollectionName())
           .document(PhoneNumberUtil.getInstance().format(phoneNumber, PhoneNumberUtil.PhoneNumberFormat.E164))
           .set(Map.of(VERIFICATION_CODE_KEY, verificationCode,
-              configuration.getExpirationFieldName(), GoogleApiUtil.timestampFromInstant(clock.instant().plus(ttl))))
+              configuration.getExpirationFieldName(), timestampFromInstant(clock.instant().plus(ttl))))
           .get();
     } catch (final InterruptedException | ExecutionException e) {
       throw new RuntimeException(e);
     } finally {
       sample.stop(storeVerificationCodeTimer);
     }
+  }
+
+  @VisibleForTesting
+  static Timestamp timestampFromInstant(final Instant instant) {
+    return Timestamp.ofTimeSecondsAndNanos(instant.getEpochSecond(), instant.getNano());
   }
 }

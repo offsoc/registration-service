@@ -19,7 +19,6 @@ import jakarta.inject.Inject;
 import java.util.Collections;
 import java.util.Locale;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -81,7 +80,7 @@ class WeightedSelectionStrategyIntegrationTest {
   @MockBean
   PrescribedVerificationCodeRepository prescribedVerificationCodeRepository() {
     final PrescribedVerificationCodeRepository repository = mock(PrescribedVerificationCodeRepository.class);
-    when(repository.getVerificationCodes()).thenReturn(CompletableFuture.completedFuture(Collections.emptyMap()));
+    when(repository.getVerificationCodes()).thenReturn(Collections.emptyMap());
     return repository;
   }
 
@@ -119,13 +118,11 @@ class WeightedSelectionStrategyIntegrationTest {
   private static final Phonenumber.PhoneNumber USE_INFOBIP_SMS_NUMBER =
       PhoneNumberUtil.getInstance().getExampleNumber("GB");
 
-  private static final Phonenumber.PhoneNumber USE_MB_E164_OVERRIDE_NUMBER;
   private static final Phonenumber.PhoneNumber FICTITIOUS_PHONE_NUMBER;
 
   static {
     try {
       FICTITIOUS_PHONE_NUMBER = PhoneNumberUtil.getInstance().parse("+12025550123", null);
-      USE_MB_E164_OVERRIDE_NUMBER = PhoneNumberUtil.getInstance().parse("+12223334444", null);
     } catch (final NumberParseException e) {
       // This should never happen for a literally-specified, known-good phone number
       throw new AssertionError(e);
@@ -135,7 +132,7 @@ class WeightedSelectionStrategyIntegrationTest {
   @BeforeEach
   void setUp() {
     when(prescribedVerificationCodeRepository.getVerificationCodes())
-        .thenReturn(CompletableFuture.completedFuture(Map.of(PRESCRIBED_CODE_NUMBER, "123456")));
+        .thenReturn(Map.of(PRESCRIBED_CODE_NUMBER, "123456"));
 
     prescribedVerificationCodeSender.refreshPhoneNumbers();
   }

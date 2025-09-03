@@ -53,7 +53,7 @@ public class WriteInfobipDefaultPricesToBigTableClient implements Runnable {
       final Stream<KeyAndPrice> keyAndPrices = CSVFormat.EXCEL.builder()
           .setHeader()
           .setSkipHeaderRecord(true)
-          .build()
+          .get()
           .parse(new FileReader(csvFile))
           .stream()
           .filter(record -> record.get(keyColumnName) != null && record.get(priceColumnName) != null)

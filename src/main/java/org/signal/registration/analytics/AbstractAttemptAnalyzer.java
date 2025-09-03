@@ -10,12 +10,9 @@ import io.micronaut.context.event.ApplicationEventPublisher;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.concurrent.CompletableFuture;
 import org.signal.registration.sender.VerificationCodeSender;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
 
 /**
  * An abstract attempt analyzer periodically reads attempts pending analysis from a
@@ -48,16 +45,24 @@ public abstract class AbstractAttemptAnalyzer {
   protected void analyzeAttempts() {
     logger.debug("Processing attempts pending analysis");
 
-    Flux.from(repository.getBySender(getSenderName()))
-            .flatMap(attemptPendingAnalysis -> Mono.fromFuture(analyzeAttempt(attemptPendingAnalysis))
-                .map(analysis -> new AttemptAnalyzedEvent(attemptPendingAnalysis, analysis)))
+    repository.getBySender(getSenderName())
+        .map(attemptPendingAnalysis -> {
+          try {
+            return new AttemptAnalyzedEvent(attemptPendingAnalysis, analyzeAttempt(attemptPendingAnalysis));
+          } catch (final RuntimeException e) {
+            logger.warn("Failed to analyze attempt", e);
+            return new AttemptAnalyzedEvent(attemptPendingAnalysis, AttemptAnalysis.EMPTY);
+          }
+        })
         .filter(attemptAnalyzedEvent -> {
-          final Instant attemptTimestamp = Instant.ofEpochMilli(attemptAnalyzedEvent.attemptPendingAnalysis().getTimestampEpochMillis());
+          final Instant attemptTimestamp =
+              Instant.ofEpochMilli(attemptAnalyzedEvent.attemptPendingAnalysis().getTimestampEpochMillis());
+
           final boolean pricingDeadlinePassed = clock.instant().isAfter(attemptTimestamp.plus(getPricingDeadline()));
 
           return attemptAnalyzedEvent.attemptAnalysis().price().isPresent() || pricingDeadlinePassed;
         })
-        .subscribe(attemptAnalyzedEvent -> {
+        .forEach(attemptAnalyzedEvent -> {
           repository.remove(attemptAnalyzedEvent.attemptPendingAnalysis());
           attemptAnalyzedEventPublisher.publishEvent(attemptAnalyzedEvent);
         });
@@ -89,5 +94,5 @@ public abstract class AbstractAttemptAnalyzer {
    *
    * @see VerificationCodeSender#getName()
    */
-  protected abstract CompletableFuture<AttemptAnalysis> analyzeAttempt(final AttemptPendingAnalysis attemptPendingAnalysis);
+  protected abstract AttemptAnalysis analyzeAttempt(final AttemptPendingAnalysis attemptPendingAnalysis);
 }

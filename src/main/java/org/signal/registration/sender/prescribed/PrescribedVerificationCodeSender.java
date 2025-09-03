@@ -18,7 +18,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicReference;
 import org.apache.commons.lang3.StringUtils;
 import org.signal.registration.sender.AttemptData;
@@ -50,8 +49,8 @@ public class PrescribedVerificationCodeSender implements VerificationCodeSender 
 
   @Scheduled(fixedRate = "10s")
   @VisibleForTesting
-  public CompletableFuture<Void> refreshPhoneNumbers() {
-    return verificationCodeRepository.getVerificationCodes().thenAccept(prescribedVerificationCodes::set);
+  public void refreshPhoneNumbers() {
+    prescribedVerificationCodes.set(verificationCodeRepository.getVerificationCodes());
   }
 
   @Override

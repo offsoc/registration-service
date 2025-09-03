@@ -5,21 +5,6 @@
 
 package org.signal.registration.sender.prescribed;
 
-import com.google.i18n.phonenumbers.PhoneNumberUtil;
-import com.google.i18n.phonenumbers.Phonenumber;
-import com.google.protobuf.InvalidProtocolBufferException;
-import org.apache.commons.lang3.RandomStringUtils;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.signal.registration.sender.ClientType;
-import org.signal.registration.sender.MessageTransport;
-import org.signal.registration.sender.SenderRejectedRequestException;
-import java.io.UncheckedIOException;
-import java.util.Collections;
-import java.util.Map;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -27,6 +12,19 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+
+import com.google.i18n.phonenumbers.PhoneNumberUtil;
+import com.google.i18n.phonenumbers.Phonenumber;
+import com.google.protobuf.InvalidProtocolBufferException;
+import java.io.UncheckedIOException;
+import java.util.Collections;
+import java.util.Map;
+import org.apache.commons.lang3.RandomStringUtils;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.signal.registration.sender.ClientType;
+import org.signal.registration.sender.MessageTransport;
+import org.signal.registration.sender.SenderRejectedRequestException;
 
 class PrescribedVerificationCodeSenderTest {
 
@@ -44,7 +42,7 @@ class PrescribedVerificationCodeSenderTest {
   void setUp() {
     final PrescribedVerificationCodeRepository repository = mock(PrescribedVerificationCodeRepository.class);
     when(repository.getVerificationCodes())
-        .thenReturn(CompletableFuture.completedFuture(Map.of(PRESCRIBED_CODE_NUMBER, VERIFICATION_CODE)));
+        .thenReturn(Map.of(PRESCRIBED_CODE_NUMBER, VERIFICATION_CODE));
 
     sender = new PrescribedVerificationCodeSender(repository);
     sender.refreshPhoneNumbers();

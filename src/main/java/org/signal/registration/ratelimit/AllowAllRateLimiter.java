@@ -8,7 +8,6 @@ package org.signal.registration.ratelimit;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
 
 /**
  * A trivial rate limiter implementation that allows all actions unconditionally. This implementation is intended only

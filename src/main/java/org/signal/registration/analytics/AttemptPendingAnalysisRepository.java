@@ -5,9 +5,8 @@
 
 package org.signal.registration.analytics;
 
-import org.reactivestreams.Publisher;
 import org.signal.registration.sender.VerificationCodeSender;
-import java.util.concurrent.CompletableFuture;
+import java.util.stream.Stream;
 
 /**
  * An "attempt pending analysis" repository stores partial information about completed verification attempts with the
@@ -21,30 +20,25 @@ public interface AttemptPendingAnalysisRepository {
    * remote ID, it will be overwritten by the given event.
    *
    * @param attemptPendingAnalysis the attempt pending analysis to be stored
-   *
-   * @return a future that completes when the attempt pending analysis has been stored
    */
-  CompletableFuture<Void> store(AttemptPendingAnalysis attemptPendingAnalysis);
+  void store(AttemptPendingAnalysis attemptPendingAnalysis);
 
   /**
-   * Returns a publisher that yields all attempts pending analysis for the given sender.
+   * Returns a stream that yields all attempts pending analysis for the given sender.
    *
    * @param senderName the name of the sender for which to retrieve attempts pending analysis
    *
-   * @return a publisher that yields all attempts pending analysis for the given sender
+   * @return a stream that yields all attempts pending analysis for the given sender
    *
    * @see VerificationCodeSender#getName()
    */
-  Publisher<AttemptPendingAnalysis> getBySender(String senderName);
+  Stream<AttemptPendingAnalysis> getBySender(String senderName);
 
   /**
    * Removes an individual attempt pending analysis from this repository. Has no effect if the given attempt does not
    * exist within this repository.
    *
    * @param attemptPendingAnalysis the attempt to remove from this repository
-   *
-   * @return a future that completes when the identified attempt pending analysis is no longer present in this
-   * repository
    */
-  CompletableFuture<Void> remove(AttemptPendingAnalysis attemptPendingAnalysis);
+  void remove(AttemptPendingAnalysis attemptPendingAnalysis);
 }
