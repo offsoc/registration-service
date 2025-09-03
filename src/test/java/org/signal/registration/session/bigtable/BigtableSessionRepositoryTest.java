@@ -13,6 +13,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 import com.google.cloud.bigtable.admin.v2.BigtableTableAdminClient;
@@ -33,6 +34,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import java.util.function.Function;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -207,6 +209,35 @@ class BigtableSessionRepositoryTest extends AbstractSessionRepositoryTest {
         () -> sessionRepository.getSession(UUIDUtil.uuidFromByteString(expiredSession.getId())));
 
     verify(sessionCompletedEventPublisher).publishEvent(new SessionCompletedEvent(expiredSession));
+  }
+
+  @Test
+  void deleteExpiredSessionsContested() {
+    final Instant currentTime = getClock().instant();
+
+    final RegistrationSession expiredSession = sessionRepository.createSession(
+        PhoneNumberUtil.getInstance().getExampleNumber("US"),
+        SessionMetadata.newBuilder().build(),
+        currentTime.minus(BigtableSessionRepository.REMOVAL_TTL_PADDING.multipliedBy(2)));
+
+    final RegistrationSession contestedExpiredSession = sessionRepository.createSession(
+        PhoneNumberUtil.getInstance().getExampleNumber("GB"),
+        SessionMetadata.newBuilder().build(),
+        currentTime.minus(BigtableSessionRepository.REMOVAL_TTL_PADDING.multipliedBy(2)));
+
+    // Remove the contested session to simulate multiple processes making a "remove expired sessions" pass in parallel
+    assertTrue(sessionRepository.removeExpiredSession(contestedExpiredSession));
+
+    sessionRepository.deleteExpiredSessions(Stream.of(expiredSession, contestedExpiredSession));
+
+    assertThrows(SessionNotFoundException.class,
+        () -> sessionRepository.getSession(UUIDUtil.uuidFromByteString(expiredSession.getId())));
+
+    assertThrows(SessionNotFoundException.class,
+        () -> sessionRepository.getSession(UUIDUtil.uuidFromByteString(contestedExpiredSession.getId())));
+
+    verify(sessionCompletedEventPublisher).publishEvent(new SessionCompletedEvent(expiredSession));
+    verifyNoMoreInteractions(sessionCompletedEventPublisher);
   }
 
   @Test

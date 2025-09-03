@@ -111,16 +111,20 @@ class BigtableSessionRepository implements SessionRepository {
   @Scheduled(fixedDelay = "${session-repository.bigtable.remove-expired-sessions-interval:10s}")
   @VisibleForTesting
   void deleteExpiredSessions() {
-    getSessionsPendingRemoval()
-        .forEach(session -> {
-          removeExpiredSession(session);
+    deleteExpiredSessions(getSessionsPendingRemoval());
+  }
 
-          try {
-            sessionCompletedEventPublisher.publishEvent(new SessionCompletedEvent(session));
-          } catch (Exception e) {
-            logger.error("Error publishing SessionCompletion event", e);
-          }
-        });
+  @VisibleForTesting
+  void deleteExpiredSessions(final Stream<RegistrationSession> sessionsPendingRemoval) {
+    sessionsPendingRemoval.forEach(session -> {
+      removeExpiredSession(session);
+
+      try {
+        sessionCompletedEventPublisher.publishEvent(new SessionCompletedEvent(session));
+      } catch (Exception e) {
+        logger.error("Error publishing SessionCompletion event", e);
+      }
+    });
   }
 
   private Stream<RegistrationSession> getSessionsPendingRemoval() {
