@@ -6,7 +6,6 @@
 package org.signal.registration.messagebird;
 
 import com.messagebird.MessageBirdClient;
-import com.messagebird.MessageBirdServiceImpl;
 import io.micronaut.context.annotation.Factory;
 import jakarta.inject.Singleton;
 
@@ -15,6 +14,8 @@ public class MessageBirdClientFactory {
 
   @Singleton
   MessageBirdClient messageBirdClient(final MessageBirdClientConfiguration configuration) {
-    return new MessageBirdClient(new MessageBirdServiceImpl(configuration.accessKey()));
+    return new MessageBirdClient(new TimeoutMessageBirdServiceImpl(configuration.accessKey(),
+        configuration.connectTimeout(),
+        configuration.readTimeout()));
   }
 }
