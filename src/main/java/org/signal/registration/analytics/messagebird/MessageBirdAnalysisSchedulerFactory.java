@@ -21,7 +21,7 @@ class MessageBirdAnalysisSchedulerFactory {
   @Named(SCHEDULER_NAME)
   Scheduler messagebirdAnalysisScheduler(
       @Property(name = "analytics.messagebird.max-concurrency", defaultValue = "32") final int maxConcurrency,
-      @Property(name = "analytics.messagebird.max-queued-tasks", defaultValue = "65_536") final int maxQueuedTasks) {
+      @Property(name = "analytics.messagebird.max-queued-tasks", defaultValue = "65536") final int maxQueuedTasks) {
 
     return Schedulers.newBoundedElastic(maxConcurrency, maxQueuedTasks, SCHEDULER_NAME);
   }
