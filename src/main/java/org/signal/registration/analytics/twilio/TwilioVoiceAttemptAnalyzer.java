@@ -23,6 +23,7 @@ import org.signal.registration.analytics.AttemptPendingAnalysis;
 import org.signal.registration.analytics.AttemptPendingAnalysisRepository;
 import org.signal.registration.analytics.Money;
 import org.signal.registration.sender.twilio.classic.TwilioVoiceSender;
+import reactor.core.scheduler.Schedulers;
 
 /**
  * Analyzes verification attempts from {@link TwilioVoiceSender}.
@@ -37,7 +38,7 @@ class TwilioVoiceAttemptAnalyzer extends AbstractAttemptAnalyzer {
       final Clock clock,
       final TwilioRestClient twilioRestClient) {
 
-    super(repository, attemptAnalyzedEventPublisher, clock);
+    super(repository, Schedulers.immediate(), attemptAnalyzedEventPublisher, clock);
 
     this.twilioRestClient = twilioRestClient;
   }

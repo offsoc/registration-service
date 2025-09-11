@@ -17,6 +17,7 @@ import org.signal.registration.analytics.AttemptAnalyzedEvent;
 import org.signal.registration.analytics.AttemptPendingAnalysis;
 import org.signal.registration.analytics.AttemptPendingAnalysisRepository;
 import org.signal.registration.sender.twilio.verify.TwilioVerifySender;
+import reactor.core.scheduler.Schedulers;
 
 /**
  * Analyzes verification attempts from {@link TwilioVerifySender}.
@@ -31,7 +32,7 @@ class TwilioVerifyAttemptAnalyzer extends AbstractAttemptAnalyzer {
       final ApplicationEventPublisher<AttemptAnalyzedEvent> attemptAnalyzedEventPublisher,
       final Clock clock) {
 
-    super(repository, attemptAnalyzedEventPublisher, clock);
+    super(repository, Schedulers.immediate(), attemptAnalyzedEventPublisher, clock);
 
     this.twilioVerifyPriceEstimator = twilioVerifyPriceEstimator;
   }

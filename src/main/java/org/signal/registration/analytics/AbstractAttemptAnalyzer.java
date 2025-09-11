@@ -13,6 +13,9 @@ import java.time.Instant;
 import org.signal.registration.sender.VerificationCodeSender;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Scheduler;
 
 /**
  * An abstract attempt analyzer periodically reads attempts pending analysis from a
@@ -25,6 +28,7 @@ import org.slf4j.LoggerFactory;
 public abstract class AbstractAttemptAnalyzer {
 
   private final AttemptPendingAnalysisRepository repository;
+  private final Scheduler scheduler;
   private final ApplicationEventPublisher<AttemptAnalyzedEvent> attemptAnalyzedEventPublisher;
   private final Clock clock;
 
@@ -34,10 +38,12 @@ public abstract class AbstractAttemptAnalyzer {
   public static final Duration DEFAULT_PRICING_DEADLINE = Duration.ofHours(36);
 
   protected AbstractAttemptAnalyzer(final AttemptPendingAnalysisRepository repository,
+      final Scheduler scheduler,
       final ApplicationEventPublisher<AttemptAnalyzedEvent> attemptAnalyzedEventPublisher,
       final Clock clock) {
 
     this.repository = repository;
+    this.scheduler = scheduler;
     this.attemptAnalyzedEventPublisher = attemptAnalyzedEventPublisher;
     this.clock = clock;
   }
@@ -45,27 +51,26 @@ public abstract class AbstractAttemptAnalyzer {
   protected void analyzeAttempts() {
     logger.debug("Processing attempts pending analysis");
 
-    repository.getBySender(getSenderName())
-        .map(attemptPendingAnalysis -> {
-          try {
-            return new AttemptAnalyzedEvent(attemptPendingAnalysis, analyzeAttempt(attemptPendingAnalysis));
-          } catch (final RuntimeException e) {
-            logger.warn("Failed to analyze attempt", e);
-            return new AttemptAnalyzedEvent(attemptPendingAnalysis, AttemptAnalysis.EMPTY);
-          }
-        })
+    Flux.fromStream(repository.getBySender(getSenderName()))
+            .flatMap(attemptPendingAnalysis -> Mono.fromSupplier(() -> analyzeAttempt(attemptPendingAnalysis))
+                .onErrorResume(throwable -> {
+                  logger.warn("Failed to analyze attempt pending analysis", throwable);
+                  return Mono.empty();
+                })
+                .subscribeOn(scheduler)
+                .map(analysis -> new AttemptAnalyzedEvent(attemptPendingAnalysis, analysis)))
         .filter(attemptAnalyzedEvent -> {
-          final Instant attemptTimestamp =
-              Instant.ofEpochMilli(attemptAnalyzedEvent.attemptPendingAnalysis().getTimestampEpochMillis());
-
+          final Instant attemptTimestamp = Instant.ofEpochMilli(attemptAnalyzedEvent.attemptPendingAnalysis().getTimestampEpochMillis());
           final boolean pricingDeadlinePassed = clock.instant().isAfter(attemptTimestamp.plus(getPricingDeadline()));
 
           return attemptAnalyzedEvent.attemptAnalysis().price().isPresent() || pricingDeadlinePassed;
         })
-        .forEach(attemptAnalyzedEvent -> {
+        .doOnNext(attemptAnalyzedEvent -> {
           repository.remove(attemptAnalyzedEvent.attemptPendingAnalysis());
           attemptAnalyzedEventPublisher.publishEvent(attemptAnalyzedEvent);
-        });
+        })
+        .then()
+        .block();
   }
 
   /**

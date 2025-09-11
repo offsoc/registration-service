@@ -27,6 +27,7 @@ import java.util.stream.Stream;
 import org.apache.commons.lang3.RandomStringUtils;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import reactor.core.scheduler.Schedulers;
 
 class AbstractAttemptAnalyzerTest {
 
@@ -46,7 +47,7 @@ class AbstractAttemptAnalyzerTest {
         final ApplicationEventPublisher<AttemptAnalyzedEvent> attemptAnalyzedEventPublisher,
         final Clock clock) {
 
-      super(repository, attemptAnalyzedEventPublisher, clock);
+      super(repository, Schedulers.immediate(), attemptAnalyzedEventPublisher, clock);
     }
 
     @Override

@@ -22,16 +22,18 @@ import org.signal.registration.analytics.AttemptPendingAnalysis;
 import org.signal.registration.analytics.AttemptPendingAnalysisRepository;
 import org.signal.registration.analytics.Money;
 import org.signal.registration.analytics.PriceEstimator;
+import reactor.core.scheduler.Scheduler;
 
 abstract class AbstractMessageBirdAttemptAnalyzer extends AbstractAttemptAnalyzer {
 
   private final PriceEstimator priceEstimator;
 
   AbstractMessageBirdAttemptAnalyzer(final AttemptPendingAnalysisRepository repository,
+      final Scheduler scheduler,
       final ApplicationEventPublisher<AttemptAnalyzedEvent> attemptAnalyzedEventPublisher,
       final Clock clock, final PriceEstimator priceEstimator) {
 
-    super(repository, attemptAnalyzedEventPublisher, clock);
+    super(repository, scheduler, attemptAnalyzedEventPublisher, clock);
 
     this.priceEstimator = priceEstimator;
   }
