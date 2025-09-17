@@ -21,6 +21,10 @@ public class SenderIdSelector {
     this.defaultSenderId = defaultSenderId;
   }
 
+  public static SenderIdSelector fromConfiguration(final SenderIdSelectorConfiguration configuration) {
+    return new SenderIdSelector(configuration.senderIdsByRegion(), configuration.defaultSenderId());
+  }
+
 
   /**
    * Get a senderId to use
