@@ -21,8 +21,8 @@
   <properties>
     <packaging>jar</packaging>
 
-    <jdk.version>21</jdk.version>
-    <release.version>21</release.version>
+    <jdk.version>24</jdk.version>
+    <release.version>24</release.version>
     <exec.mainClass>org.signal.registration.Application</exec.mainClass>
 
     <!-- See https://console.cloud.google.com/artifacts/docker/google.com:cloudsdktool/us/gcr.io/google-cloud-cli -->
@@ -36,8 +36,8 @@
     is incompatible with google-cloud libraries, and a version that includes netty 4.2 is not currently available -->
     <grpc.version>1.71.0</grpc.version>
 
-    <!-- eclipse-temurin:21-jre-jammy (note: always use the multi-arch manifest *LIST* here); see https://hub.docker.com/_/eclipse-temurin -->
-    <docker.image.sha256>034ce51c134cb9abcf28e2bda88fa36ac51369bb26351d697297e81caa9a5d76</docker.image.sha256>
+    <!-- eclipse-temurin:24.0.2_12-jre-noble (note: always use the multi-arch manifest *LIST* here); see https://hub.docker.com/_/eclipse-temurin -->
+    <docker.image.sha256>85ecfc9bbb42af046d2bacbf1219d2005be4840cbfa16c2e6fd910d9ccfec95b</docker.image.sha256>
   </properties>
 
   <repositories>
@@ -52,7 +52,7 @@
       <dependency>
         <groupId>com.google.cloud</groupId>
         <artifactId>libraries-bom</artifactId>
-        <version>26.62.0</version>
+        <version>26.68.0</version>
         <type>pom</type>
         <scope>import</scope>
       </dependency>
@@ -97,17 +97,31 @@
     <dependency>
       <groupId>com.google.cloud</groupId>
       <artifactId>google-cloud-bigtable</artifactId>
+      <!-- Our direct import brings in a newer version, so exclude it here. -->
+      <exclusions>
+        <exclusion>
+          <groupId>commons-codec</groupId>
+          <artifactId>commons-codec</artifactId>
+        </exclusion>
+      </exclusions>
     </dependency>
 
     <dependency>
       <groupId>com.google.cloud</groupId>
       <artifactId>google-cloud-firestore</artifactId>
+      <!-- Our direct import brings in a newer version, so exclude it here. -->
+      <exclusions>
+        <exclusion>
+          <groupId>commons-codec</groupId>
+          <artifactId>commons-codec</artifactId>
+        </exclusion>
+      </exclusions>
     </dependency>
 
     <dependency>
       <groupId>com.googlecode.libphonenumber</groupId>
       <artifactId>libphonenumber</artifactId>
-      <version>9.0.7</version>
+      <version>9.0.14</version>
     </dependency>
 
     <dependency>
@@ -130,14 +144,6 @@
       <!-- Do not upgrade. 5.x and above uses a "send SMS" API that does not return synchronous error responses,
       and our current registration flow depends on synchronous error reporting by message providers. -->
       <version>4.3.1</version>
-    </dependency>
-
-    <!-- Explicitly specifying this dependency because upgrading micronaut to 4.7.6 excludes it; it's required by
-    the infobip java client -->
-    <dependency>
-      <groupId>org.jetbrains.kotlin</groupId>
-      <artifactId>kotlin-stdlib-jdk8</artifactId>
-      <version>1.9.25</version>
     </dependency>
 
     <dependency>
@@ -186,7 +192,7 @@
     <dependency>
       <groupId>commons-io</groupId>
       <artifactId>commons-io</artifactId>
-      <version>2.18.0</version>
+      <version>2.20.0</version>
     </dependency>
 
     <!-- Compensate for transitive dependencies knocked out by Twilio's exclusions -->
@@ -314,9 +320,14 @@
     <dependency>
       <groupId>org.apache.commons</groupId>
       <artifactId>commons-csv</artifactId>
-      <version>1.14.0</version>
+      <version>1.14.1</version>
+    </dependency>
+
+    <dependency>
+      <groupId>com.google.cloud</groupId>
+      <artifactId>google-cloud-bigquery</artifactId>
+      <!-- Our direct import brings in a newer version, so exclude it here. -->
       <exclusions>
-        <!-- conflicts with com.google.cloud:* which has a newer version -->
         <exclusion>
           <groupId>commons-codec</groupId>
           <artifactId>commons-codec</artifactId>
@@ -324,17 +335,12 @@
       </exclusions>
     </dependency>
 
-    <dependency>
-      <groupId>com.google.cloud</groupId>
-      <artifactId>google-cloud-bigquery</artifactId>
-    </dependency>
-
     <!-- Explicitly add a dependency on this version so we can re-examine a bunch of exclusions when it is transitively
     updated -->
     <dependency>
       <groupId>commons-codec</groupId>
       <artifactId>commons-codec</artifactId>
-      <version>1.18.0</version>
+      <version>1.19.0</version>
     </dependency>
 
     <!-- required for YAML configuration files in Micronaut 4 -->
@@ -391,7 +397,7 @@
     <dependency>
       <groupId>com.redis</groupId>
       <artifactId>testcontainers-redis</artifactId>
-      <version>2.2.2</version>
+      <version>2.2.4</version>
       <scope>test</scope>
     </dependency>
 
@@ -421,7 +427,7 @@
     <dependency>
       <groupId>org.apache.commons</groupId>
       <artifactId>commons-compress</artifactId>
-      <version>1.27.1</version>
+      <version>1.28.0</version>
       <scope>test</scope>
     </dependency>
 
@@ -501,7 +507,7 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-enforcer-plugin</artifactId>
-        <version>3.5.0</version>
+        <version>3.6.1</version>
 
         <executions>
           <execution>
