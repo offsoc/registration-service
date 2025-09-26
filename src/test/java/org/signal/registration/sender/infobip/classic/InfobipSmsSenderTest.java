@@ -97,6 +97,7 @@ public class InfobipSmsSenderTest {
     when(response.getMessages()).thenReturn(List.of(details));
     when(details.getStatus()).thenReturn(status);
     when(details.getMessageId()).thenReturn(RandomStringUtils.insecure().nextNumeric(22));
+    when(status.getGroupId()).thenReturn(5);
     when(status.getId()).thenReturn(87);
 
     assertThrows(SenderFraudBlockException.class,
