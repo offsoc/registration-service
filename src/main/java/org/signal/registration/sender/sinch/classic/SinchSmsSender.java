@@ -26,6 +26,7 @@ import org.signal.registration.sender.ApiClientInstrumenter;
 import org.signal.registration.sender.AttemptData;
 import org.signal.registration.sender.ClientType;
 import org.signal.registration.sender.MessageTransport;
+import org.signal.registration.sender.SenderIdSelector;
 import org.signal.registration.sender.SenderRejectedRequestException;
 import org.signal.registration.sender.UnsupportedMessageTransportException;
 import org.signal.registration.sender.VerificationCodeGenerator;
@@ -33,6 +34,7 @@ import org.signal.registration.sender.VerificationCodeSender;
 import org.signal.registration.sender.VerificationSmsBodyProvider;
 import org.signal.registration.sender.sinch.SinchClassicSessionData;
 import org.signal.registration.sender.sinch.SinchExceptions;
+import org.signal.registration.sender.sinch.SinchSenderConfiguration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -47,6 +49,7 @@ public class SinchSmsSender implements VerificationCodeSender {
   private final VerificationSmsBodyProvider verificationSmsBodyProvider;
   private final ApiClientInstrumenter apiClientInstrumenter;
   private final BatchesService smsClient;
+  private final SenderIdSelector senderIdSelector;
 
   public static final String SENDER_NAME = "sinch-sms";
 
@@ -56,12 +59,14 @@ public class SinchSmsSender implements VerificationCodeSender {
       final VerificationCodeGenerator verificationCodeGenerator,
       final VerificationSmsBodyProvider verificationSmsBodyProvider,
       final ApiClientInstrumenter apiClientInstrumenter,
-      final BatchesService smsClient) {
+      final BatchesService smsClient,
+      final SinchSenderConfiguration sinchSenderConfiguration) {
     this.sinchSmsConfiguration = sinchSmsConfiguration;
     this.verificationCodeGenerator = verificationCodeGenerator;
     this.verificationSmsBodyProvider = verificationSmsBodyProvider;
     this.apiClientInstrumenter = apiClientInstrumenter;
     this.smsClient = smsClient;
+    this.senderIdSelector = SenderIdSelector.fromConfiguration(sinchSenderConfiguration);
   }
 
   @Override
@@ -98,11 +103,13 @@ public class SinchSmsSender implements VerificationCodeSender {
     final String verificationCode = verificationCodeGenerator.generateVerificationCode();
     final String body = verificationSmsBodyProvider.getVerificationBody(phoneNumber, clientType, verificationCode,
         languageRanges);
+    final String from = senderIdSelector.getSenderId(phoneNumber);
 
     final Timer.Sample sample = Timer.start();
     try {
       final BatchResponse response = smsClient.send(
           TextRequest.builder()
+              .setFrom(from)
               .setTo(Collections.singletonList(e164))
               .setBody(body)
               .build()
@@ -119,6 +126,7 @@ public class SinchSmsSender implements VerificationCodeSender {
             SinchClassicSessionData.newBuilder().setVerificationCode(verificationCode).build()
                 .toByteArray());
       } else {
+        logger.warn("Received invalid response type from Sinch SMS API: {}, this should not happen unless Sinch is having an outage/messed up a deploy", response.getClass());
         throw new IllegalArgumentException("Received invalid response type from Sinch SMS API: " + response.getClass());
       }
     } catch (final ApiException e) {

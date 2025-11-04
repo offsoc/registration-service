@@ -19,6 +19,7 @@ import com.sinch.sdk.domains.sms.api.v1.BatchesService;
 import com.sinch.sdk.domains.sms.models.v1.batches.response.TextResponse;
 import java.io.UncheckedIOException;
 import java.time.Duration;
+import java.util.Collections;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.stream.Stream;
@@ -34,10 +35,12 @@ import org.signal.registration.sender.ApiClientInstrumenter;
 import org.signal.registration.sender.AttemptData;
 import org.signal.registration.sender.ClientType;
 import org.signal.registration.sender.MessageTransport;
+import org.signal.registration.sender.SenderIdSelector;
 import org.signal.registration.sender.SenderRateLimitedRequestException;
 import org.signal.registration.sender.SenderRejectedRequestException;
 import org.signal.registration.sender.VerificationCodeGenerator;
 import org.signal.registration.sender.VerificationSmsBodyProvider;
+import org.signal.registration.sender.sinch.SinchSenderConfiguration;
 
 @ExtendWith(MockitoExtension.class)
 class SinchSmsSenderTest {
@@ -47,6 +50,11 @@ class SinchSmsSenderTest {
 
   @Mock
   private BatchesService batchesService;
+
+  private static final SinchSenderConfiguration SINCH_SENDER_CONFIGURATION = new SinchSenderConfiguration(
+      "SIGNAL",
+      Collections.emptyMap()
+  );
 
   private SinchSmsSender sinchSmsSender;
 
@@ -59,7 +67,7 @@ class SinchSmsSenderTest {
     when(codeGenerator.generateVerificationCode()).thenReturn("1234");
 
     sinchSmsSender = new SinchSmsSender(config, codeGenerator, bodyProvider, mock(ApiClientInstrumenter.class),
-        batchesService);
+        batchesService, SINCH_SENDER_CONFIGURATION);
   }
 
   @Test
