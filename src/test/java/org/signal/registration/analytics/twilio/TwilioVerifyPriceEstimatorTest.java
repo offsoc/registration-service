@@ -6,6 +6,7 @@
 package org.signal.registration.analytics.twilio;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -41,8 +42,13 @@ class TwilioVerifyPriceEstimatorTest {
     when(priceProvider.getPricingData()).thenReturn(Flux.just(
         new TwilioSmsPrice(region, mcc, mnc, new EnumMap<>(Map.of(InboundSmsPrice.Type.SHORTCODE, basePrice)))));
 
+    final CarrierFeeAdjuster carrierFeeAdjuster = mock(CarrierFeeAdjuster.class);
+    when(carrierFeeAdjuster.addCarrierFeeIfApplicable(any(), any()))
+        .thenAnswer(invocation -> invocation.getArgument(0));
+
     final TwilioVerifyPriceEstimator priceEstimator =
-        new TwilioVerifyPriceEstimator(priceProvider, verifyFee.amount(), verifyFee.currency().getCurrencyCode());
+        new TwilioVerifyPriceEstimator(priceProvider, verifyFee.amount(), verifyFee.currency().getCurrencyCode(),
+            carrierFeeAdjuster);
 
     priceEstimator.refreshPrices();
 
@@ -71,7 +77,8 @@ class TwilioVerifyPriceEstimatorTest {
   @MethodSource
   void getNumberTypes(final int attemptId, final List<InboundSmsPrice.Type> expectedNumberTypes) {
     final TwilioVerifyPriceEstimator priceEstimator =
-        new TwilioVerifyPriceEstimator(mock(TwilioSmsPriceProvider.class), new BigDecimal("1.00"), "USD");
+        new TwilioVerifyPriceEstimator(mock(TwilioSmsPriceProvider.class), new BigDecimal("1.00"), "USD",
+            mock(CarrierFeeAdjuster.class));
 
     assertEquals(expectedNumberTypes, priceEstimator.getNumberTypes(AttemptPendingAnalysis.newBuilder()
         .setAttemptId(attemptId)

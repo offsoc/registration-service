@@ -9,6 +9,7 @@ import com.twilio.http.TwilioRestClient;
 import com.twilio.rest.api.v2010.account.Message;
 import io.micronaut.context.event.ApplicationEventPublisher;
 import io.micronaut.scheduling.annotation.Scheduled;
+import jakarta.inject.Named;
 import jakarta.inject.Singleton;
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -33,17 +34,20 @@ class TwilioMessagingServiceAttemptAnalyzer extends AbstractAttemptAnalyzer {
 
   private final TwilioRestClient twilioRestClient;
   private final TwilioMessagingPriceEstimator twilioMessagingPriceEstimator;
+  private final CarrierFeeAdjuster carrierFeeAdjuster;
 
   protected TwilioMessagingServiceAttemptAnalyzer(final AttemptPendingAnalysisRepository repository,
       final ApplicationEventPublisher<AttemptAnalyzedEvent> attemptAnalyzedEventPublisher,
       final Clock clock,
       final TwilioRestClient twilioRestClient,
-      final TwilioMessagingPriceEstimator twilioMessagingPriceEstimator) {
+      final TwilioMessagingPriceEstimator twilioMessagingPriceEstimator,
+      @Named("sms") final CarrierFeeAdjuster carrierFeeAdjuster) {
 
     super(repository, Schedulers.immediate(), attemptAnalyzedEventPublisher, clock);
 
     this.twilioRestClient = twilioRestClient;
     this.twilioMessagingPriceEstimator = twilioMessagingPriceEstimator;
+    this.carrierFeeAdjuster = carrierFeeAdjuster;
   }
 
   @Override
@@ -65,9 +69,9 @@ class TwilioMessagingServiceAttemptAnalyzer extends AbstractAttemptAnalyzer {
         ? Optional.of(new Money(new BigDecimal(message.getPrice()).negate(),
         Currency.getInstance(message.getPriceUnit().getCurrencyCode().toUpperCase(Locale.ROOT))))
         : Optional.empty();
-
-    return new AttemptAnalysis(maybePrice,
-        twilioMessagingPriceEstimator.estimatePrice(attemptPendingAnalysis, null, null),
+    return new AttemptAnalysis(maybePrice.map(price -> carrierFeeAdjuster.addCarrierFeeIfApplicable(price, attemptPendingAnalysis.getRegion())),
+        twilioMessagingPriceEstimator
+            .estimatePrice(attemptPendingAnalysis, null, null),
         Optional.empty(),
         Optional.empty());
   }

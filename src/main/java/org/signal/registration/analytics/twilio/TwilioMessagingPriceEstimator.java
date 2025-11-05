@@ -7,6 +7,7 @@ package org.signal.registration.analytics.twilio;
 
 import com.google.i18n.phonenumbers.PhoneNumberUtil;
 import com.twilio.type.InboundSmsPrice;
+import jakarta.inject.Named;
 import jakarta.inject.Singleton;
 import java.util.List;
 import org.signal.registration.analytics.AttemptPendingAnalysis;
@@ -17,9 +18,10 @@ class TwilioMessagingPriceEstimator extends AbstractTwilioSmsPriceEstimator {
   private final TwilioMessagingPriceEstimatorConfiguration configuration;
 
   TwilioMessagingPriceEstimator(final TwilioSmsPriceProvider dataSource,
-      final TwilioMessagingPriceEstimatorConfiguration configuration) {
+      final TwilioMessagingPriceEstimatorConfiguration configuration,
+      @Named("sms") final CarrierFeeAdjuster carrierFeeAdjuster) {
 
-    super(dataSource);
+    super(dataSource, carrierFeeAdjuster);
     this.configuration = configuration;
   }
 

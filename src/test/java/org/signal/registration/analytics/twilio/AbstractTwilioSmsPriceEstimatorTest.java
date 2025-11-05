@@ -21,6 +21,7 @@ import java.util.*;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -32,8 +33,9 @@ class AbstractTwilioSmsPriceEstimatorTest {
 
         private final List<InboundSmsPrice.Type> numberTypes;
 
-        TestPriceEstimator(final TwilioSmsPriceProvider dataSource, final List<InboundSmsPrice.Type> numberTypes) {
-            super(dataSource);
+        TestPriceEstimator(final TwilioSmsPriceProvider dataSource, final List<InboundSmsPrice.Type> numberTypes,
+            final CarrierFeeAdjuster carrierFeeAdjuster) {
+            super(dataSource, carrierFeeAdjuster);
             this.numberTypes = numberTypes;
         }
 
@@ -71,7 +73,11 @@ class AbstractTwilioSmsPriceEstimatorTest {
         final TwilioSmsPriceProvider priceProvider = mock(TwilioSmsPriceProvider.class);
         when(priceProvider.getPricingData()).thenReturn(Flux.fromIterable(prices));
 
-        final TestPriceEstimator priceEstimator = new TestPriceEstimator(priceProvider, numberTypes);
+        final CarrierFeeAdjuster carrierFeeAdjuster = mock(CarrierFeeAdjuster.class);
+        when(carrierFeeAdjuster.addCarrierFeeIfApplicable(any(), any()))
+          .thenAnswer(invocation -> invocation.getArgument(0));
+
+        final TestPriceEstimator priceEstimator = new TestPriceEstimator(priceProvider, numberTypes, carrierFeeAdjuster);
         priceEstimator.refreshPrices();
 
         assertEquals(Optional.ofNullable(expectedEstimatedPrice), priceEstimator.estimatePrice(attemptPendingAnalysis, mcc, mnc));
