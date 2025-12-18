@@ -29,6 +29,7 @@ import org.signal.registration.sender.ApiClientInstrumenter;
 import org.signal.registration.sender.AttemptData;
 import org.signal.registration.sender.ClientType;
 import org.signal.registration.sender.MessageTransport;
+import org.signal.registration.sender.SenderFraudBlockException;
 import org.signal.registration.sender.SenderIdSelector;
 import org.signal.registration.sender.SenderRejectedRequestException;
 import org.signal.registration.sender.UnsupportedMessageTransportException;
@@ -59,6 +60,8 @@ public class InfobipSmsSender implements VerificationCodeSender {
   private final ApiClientInstrumenter apiClientInstrumenter;
   private final SenderIdSelector senderIdSelector;
   public static final String SENDER_NAME = "infobip-sms";
+  // ID 87 is "SIGNALS_BLOCKED", which is defined as "Message has been rejected due to an anti-fraud mechanism"
+  private static final String FRAUD_ERROR_CODE = "87";
 
   public InfobipSmsSender(
       final InfobipSmsConfiguration configuration,
@@ -140,13 +143,17 @@ public class InfobipSmsSender implements VerificationCodeSender {
               .build().toByteArray());
     } catch (final SenderRejectedRequestException | RuntimeException e) {
       logger.debug("Failed to send SMS message with {}", e.getMessage());
-
+      final String infobipErrorCode = InfobipExceptions.getErrorCode(e);
       apiClientInstrumenter.recordApiCallMetrics(
           getName(),
           "sms.create",
           false,
-          InfobipExceptions.getErrorCode(e),
+          infobipErrorCode,
           sample);
+
+      if (infobipErrorCode != null && infobipErrorCode.equals(FRAUD_ERROR_CODE)) {
+        throw new SenderFraudBlockException("Message has been rejected due to an anti-fraud mechanism");
+      }
 
       throw e;
     } catch (final ApiException e) {
@@ -180,7 +187,6 @@ public class InfobipSmsSender implements VerificationCodeSender {
 
     // Infobip enabled our account to return a 200 response with groupId 4 ("expired") or 5 ("rejected") in the response
     // body for a create SMS request, so we check for that and convert it into an exception.
-    InfobipExceptions.maybeThrowSenderFraudBlockException(finalResponseDetail.getStatus());
     InfobipExceptions.maybeThrowInfobipRejectedRequestException(finalResponseDetail.getStatus());
     return finalResponseDetail.getMessageId();
   }

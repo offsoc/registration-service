@@ -29,7 +29,8 @@ class TwilioMessagingPriceEstimatorTest {
 
     final TwilioMessagingPriceEstimator priceEstimator =
         new TwilioMessagingPriceEstimator(mock(TwilioSmsPriceProvider.class),
-            new TwilioMessagingPriceEstimatorConfiguration(nanpaNumberTypes, defaultNumberTypes, regionalNumberTypes));
+            new TwilioMessagingPriceEstimatorConfiguration(nanpaNumberTypes, defaultNumberTypes, regionalNumberTypes),
+            mock(CarrierFeeAdjuster.class));
 
     assertEquals(expectedNumberTypes, priceEstimator.getNumberTypes(AttemptPendingAnalysis.newBuilder()
         .setRegion(region)

@@ -183,4 +183,14 @@ message SessionMetadata {
    * session represents a "re-registration" attempt).
    */
   bool account_exists_with_e164 = 1;
+
+  /**
+   * The MCC as reported by the client.
+   */
+  string mcc = 2;
+
+  /**
+   * The MNC as reported by the client.
+   */
+  string mnc = 3;
 }

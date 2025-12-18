@@ -30,14 +30,17 @@ import java.util.Optional;
 abstract class AbstractTwilioSmsPriceEstimator implements PriceEstimator {
 
   private final TwilioSmsPriceProvider dataSource;
+  private final CarrierFeeAdjuster carrierFeeAdjuster;
 
   private volatile Map<String, EnumMap<InboundSmsPrice.Type, Money>> pricesByMccMnc = Collections.emptyMap();
   private volatile Map<String, EnumMap<InboundSmsPrice.Type, Money>> averagePricesByRegion = Collections.emptyMap();
 
   private final Logger logger = LoggerFactory.getLogger(getClass());
 
-  AbstractTwilioSmsPriceEstimator(final TwilioSmsPriceProvider dataSource) {
+  AbstractTwilioSmsPriceEstimator(final TwilioSmsPriceProvider dataSource,
+      final  CarrierFeeAdjuster carrierFeeAdjuster) {
     this.dataSource = dataSource;
+    this.carrierFeeAdjuster = carrierFeeAdjuster;
   }
 
   @VisibleForTesting
@@ -101,7 +104,8 @@ abstract class AbstractTwilioSmsPriceEstimator implements PriceEstimator {
         .flatMap(pricesByNumberType -> getNumberTypes(attemptPendingAnalysis).stream()
             .map(pricesByNumberType::get)
             .filter(Objects::nonNull)
-            .findFirst());
+            .findFirst())
+        .map(price -> carrierFeeAdjuster.addCarrierFeeIfApplicable(price, attemptPendingAnalysis.getRegion()));
   }
 
   /**

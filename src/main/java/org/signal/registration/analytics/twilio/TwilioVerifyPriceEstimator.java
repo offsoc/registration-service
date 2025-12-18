@@ -7,6 +7,7 @@ package org.signal.registration.analytics.twilio;
 
 import com.twilio.type.InboundSmsPrice;
 import io.micronaut.context.annotation.Value;
+import jakarta.inject.Named;
 import jakarta.inject.Singleton;
 import org.signal.registration.analytics.AttemptPendingAnalysis;
 import org.signal.registration.analytics.Money;
@@ -26,9 +27,10 @@ class TwilioVerifyPriceEstimator extends AbstractTwilioSmsPriceEstimator {
 
   TwilioVerifyPriceEstimator(final TwilioSmsPriceProvider dataSource,
       @Value("${analytics.twilio.verify.fee-amount:0.05}") final BigDecimal verifyFeeAmount,
-      @Value("${analytics.twilio.verify.fee-currency:USD}") final String verifyFeeCurrency) {
+      @Value("${analytics.twilio.verify.fee-currency:USD}") final String verifyFeeCurrency,
+      @Named("verify") final CarrierFeeAdjuster carrierFeeAdjuster) {
 
-    super(dataSource);
+    super(dataSource, carrierFeeAdjuster);
 
     verifyFee = new Money(verifyFeeAmount, Currency.getInstance(verifyFeeCurrency));
   }

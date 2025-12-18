@@ -70,6 +70,9 @@ import org.signal.registration.sender.twilio.verify.TwilioVerifySender;
 @Property(name = "infobip.default-sender-id", value="default")
 @Property(name = "infobip.api-key", value="api-key")
 @Property(name = "infobip.base-url", value="https://mmmex9.us.api.com")
+@Property(name = "sinch.sms.client.service-plan-id", value="servicePlanId")
+@Property(name = "sinch.sms.client.api-token", value="apiToken")
+@Property(name = "sinch.default-sender-id", value="default")
 class WeightedSelectionStrategyIntegrationTest {
 
   @MockBean(RegistrationService.class)

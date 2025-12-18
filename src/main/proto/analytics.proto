@@ -63,4 +63,14 @@ message AttemptPendingAnalysis {
    * succeeded.
    */
   bool verified = 10;
+
+  /**
+   * The MCC as reported by the client.
+   */
+  string client_mcc = 11;
+
+  /**
+   * The MNC as reported by the client.
+   */
+  string client_mnc = 12;
 }

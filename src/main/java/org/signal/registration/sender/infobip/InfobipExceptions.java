@@ -70,13 +70,6 @@ public class InfobipExceptions {
     return null;
   }
 
-  public static void maybeThrowSenderFraudBlockException(final MessageStatus status) throws SenderFraudBlockException {
-    // ID 87 is "SIGNALS_BLOCKED", which is defined as "Message has been rejected due to an anti-fraud mechanism"
-    if (status.getId() == 87) {
-      throw new SenderFraudBlockException("Message has been rejected due to an anti-fraud mechanism");
-    }
-  }
-
   public static void maybeThrowInfobipRejectedRequestException(final MessageStatus status) throws InfobipRejectedRequestException {
     if (REJECTED_GROUP_IDS.contains(status.getGroupId())) {
       throw new InfobipRejectedRequestException(status);

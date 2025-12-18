@@ -64,6 +64,8 @@ public class RegistrationServiceGrpcEndpoint extends SimpleRegistrationServiceGr
           registrationService.createRegistrationSession(phoneNumber, request.getRateLimitCollationKey(),
               SessionMetadata.newBuilder()
                   .setAccountExistsWithE164(request.getAccountExistsWithE164())
+                  .setMcc(request.getMcc())
+                  .setMnc(request.getMnc())
                   .build());
 
       return CreateRegistrationSessionResponse.newBuilder()
